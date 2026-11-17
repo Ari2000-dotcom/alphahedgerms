@@ -2,23 +2,14 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { api, ApiError, overview, signedIn, type AccountView, type Client, type Position } from "./api";
 import { BROKER_ORDER, BROKERS, type BrokerId } from "./brokers";
-import { moneyParts } from "./format";
+import { fail, go, Money, qty, say, toast } from "./ui";
+import { ClientsGrid, startAdding } from "./clients";
 import * as I from "./icons";
 
 // -------------------------------------------------------------------- state
 
-const toast = signal("");
-let toastTimer: number | undefined;
-function say(msg: string) {
-  toast.value = msg;
-  clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => (toast.value = ""), 3200);
-}
-const fail = (e: unknown) => say(e instanceof Error ? e.message : String(e));
-
 const route = signal(location.hash || "#/");
 window.addEventListener("hashchange", () => (route.value = location.hash || "#/"));
-const go = (to: string) => (location.hash = to);
 
 const busy = signal(false);
 
@@ -33,21 +24,6 @@ async function readBrokers() {
     busy.value = false;
   }
 }
-
-// ------------------------------------------------------------------ numbers
-
-function Money({ n, plus = false, tone = false }: { n: number | null | undefined; plus?: boolean; tone?: boolean }) {
-  if (n === null || n === undefined) return <span class="money zero">–</span>;
-  const p = moneyParts(n, plus);
-  if (!p) return <span class="money zero">–</span>;
-  return (
-    <span class={"money" + (tone ? ` pnl ${p.tone}` : "")}>
-      {p.sign}{p.int}<span class="frac">{p.frac}</span>
-    </span>
-  );
-}
-
-const qty = (n: number) => (n === 0 ? "0" : n.toLocaleString("en-IN"));
 
 // ------------------------------------------------------------------ sign in
 
@@ -248,8 +224,8 @@ function Overview() {
         <div class="canvas"><div class="empty">
           <span class="glyph"><I.NavAccounts /></span>
           <h2>Add your first client</h2>
-          <p>A client owns broker accounts. Add the client, then add their Zerodha, Kotak or Angel One account and their positions and margin appear here.</p>
-          <button class="btn primary" onClick={() => go("#/clients?add=1")}><I.Plus /> Add a client</button>
+          <p>Add a client with their broker's sign-in details in one row, the way the copy-trading desk adds an account. Their positions and margin then appear here.</p>
+          <button class="btn primary" onClick={() => { startAdding(); go("#/clients"); }}><I.Plus /> Add a client</button>
         </div></div>
       </section>
     );
@@ -286,112 +262,6 @@ function Overview() {
 
 function Loading() {
   return <section class="screen"><div class="canvas"><div class="skel" aria-hidden="true">{[0, 1, 2].map((i) => <div key={i} />)}</div></div></section>;
-}
-
-// ------------------------------------------------------------------ clients
-
-function ClientsPage() {
-  const o = overview.value;
-  const [adding, setAdding] = useState(location.hash.includes("add=1"));
-  const [q, setQ] = useState("");
-  const [f, setF] = useState({ client_code: "", name: "", phone: "", email: "" });
-  const [err, setErr] = useState("");
-  const [saving, setSaving] = useState(false);
-  if (!o) return <Loading />;
-  const t = q.trim().toLowerCase();
-  const rows = t ? o.clients.filter((c) => [c.client_code, c.name, c.phone ?? "", c.email ?? ""].some((x) => x.toLowerCase().includes(t))) : o.clients;
-
-  async function save() {
-    if (saving) return;
-    if (!f.client_code.trim() || !f.name.trim()) return setErr("A client needs a code and a name.");
-    setSaving(true);
-    setErr("");
-    try {
-      const id = await api.addClient(f);
-      say(`${f.name} added. Now add their broker account.`);
-      setAdding(false);
-      setF({ client_code: "", name: "", phone: "", email: "" });
-      go(`#/clients/${id}`);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
-  }
-  const keys = (e: KeyboardEvent) => {
-    if (e.key === "Enter") { e.preventDefault(); void save(); }
-    if (e.key === "Escape") { setAdding(false); setErr(""); }
-  };
-  const input = (k: keyof typeof f, label: string, placeholder: string, bad = false) => (
-    <label class="fld">
-      <span class="lab">{label}</span>
-      <input value={f[k]} placeholder={placeholder} autocomplete="off" aria-invalid={bad ? "true" : undefined} autofocus={k === "client_code"} onInput={(e) => { const v = e.currentTarget.value; setF((p) => ({ ...p, [k]: v })); }} onKeyDown={keys} />
-    </label>
-  );
-
-  return (
-    <section class="screen">
-      <div class="strip">
-        <h1>Clients</h1>
-        <span class="count">{rows.length === o.clients.length ? o.clients.length : `${rows.length} of ${o.clients.length}`}</span>
-        <span class="rule" />
-        <label class="search">
-          <I.Search />
-          <input type="search" placeholder="Search clients" aria-label="Search clients" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
-        </label>
-        <span class="grow" />
-        <button class="btn primary" disabled={adding} onClick={() => setAdding(true)}><I.Plus /> Add client</button>
-      </div>
-
-      {adding && (
-        <div class="addpanel">
-          <h2>New client</h2>
-          <div class="addgrid">
-            {input("client_code", "Client code", "C001, or the code you use", err.includes("code"))}
-            {input("name", "Name", "Full name", err.includes("name"))}
-            {input("phone", "Phone", "Optional")}
-            {input("email", "Email", "Optional")}
-          </div>
-          {err && <p class="banner" role="alert">{err}</p>}
-          <div class="addfoot">
-            <button class="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save client"}</button>
-            <button class="btn quiet" onClick={() => { setAdding(false); setErr(""); }}>Cancel</button>
-            <span class="sub">After saving, you add the client's broker accounts.</span>
-          </div>
-        </div>
-      )}
-
-      <div class="canvas">
-        {rows.length === 0 ? (
-          <p class="empty-line">{o.clients.length === 0 ? "No clients yet." : "No client matches."}</p>
-        ) : (
-          <table class="rtable">
-            <thead>
-              <tr>
-                <th>Code</th><th>Name</th><th>Phone</th><th>Email</th><th class="num">Accounts</th><th class="num">Open positions</th><th class="num">P&amp;L</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((c, i) => {
-                const ps = o.positions.filter((p) => p.client_id === c.id);
-                return (
-                  <tr class="rrow link" key={c.id} style={{ "--i": Math.min(i, 14) } as never} onClick={() => go(`#/clients/${c.id}`)}>
-                    <td class="sub">{c.client_code}</td>
-                    <td class="name"><a href={`#/clients/${c.id}`}>{c.name}</a></td>
-                    <td class="sub">{c.phone ?? "–"}</td>
-                    <td class="sub">{c.email ?? "–"}</td>
-                    <td class="num">{c.accounts}</td>
-                    <td class="num">{ps.filter((p) => p.net_quantity !== 0).length}</td>
-                    <td class="num"><Money n={ps.length ? ps.reduce((s, p) => s + (p.pnl ?? 0), 0) : null} plus tone /></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </section>
-  );
 }
 
 // ------------------------------------------------------------ client detail
@@ -621,7 +491,7 @@ export function App() {
 
   const r = route.value.split("?")[0];
   let page = <Overview />;
-  if (r === "#/clients") page = <ClientsPage />;
+  if (r === "#/clients") page = <ClientsGrid />;
   else if (r.startsWith("#/clients/")) page = <ClientPage id={r.slice("#/clients/".length)} key={r} />;
   else if (r === "#/positions") page = <PositionsPage />;
   return <Shell>{page}</Shell>;

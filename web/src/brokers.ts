@@ -74,3 +74,25 @@ export const BROKERS: Record<BrokerId, { name: string; note: string; fields: Fie
     ],
   },
 };
+
+/** The sign-in columns of the clients grid. A broker fills the ones it needs; the rest show a dash. */
+export type CredCol = "userId" | "apiKey" | "apiSecret" | "login" | "totp" | "mobile" | "redirect";
+
+export const CRED_COLS: { id: CredCol; label: string; w: number }[] = [
+  { id: "userId", label: "User ID", w: 104 },
+  { id: "apiKey", label: "API key", w: 124 },
+  { id: "apiSecret", label: "API secret", w: 114 },
+  { id: "login", label: "Password / PIN", w: 116 },
+  { id: "totp", label: "TOTP secret", w: 114 },
+  { id: "mobile", label: "Mobile", w: 124 },
+  { id: "redirect", label: "Redirect URL", w: 150 },
+];
+
+const COL_OF: Record<string, CredCol> = {
+  userId: "userId", apiKey: "apiKey", apiSecret: "apiSecret", password: "login", pin: "login", totpSecret: "totp", mobile: "mobile", redirectUrl: "redirect",
+};
+
+/** The field a broker keeps in a grid column, or undefined when it does not use that column. */
+export function fieldFor(broker: BrokerId, col: CredCol): Field | undefined {
+  return BROKERS[broker].fields.find((f) => COL_OF[f.key] === col);
+}

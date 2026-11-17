@@ -46,6 +46,10 @@ export interface AccountView {
   account: Account;
   status: Status | null;
   margin: Margin | null;
+  /** Which secrets are saved. Never their values. */
+  saved: Record<string, boolean>;
+  /** The plain fields (mobile, redirect URL). */
+  fields: Record<string, string>;
 }
 
 export interface Position {
@@ -137,6 +141,18 @@ export const api = {
   },
   async addAccount(clientId: string, a: { broker: string; user_id: string; label?: string; secrets: Record<string, string>; fields: Record<string, string> }) {
     const r = await call<{ id: string; status: Status }>("POST", `/clients/${clientId}/accounts`, a);
+    await api.loadOverview();
+    return r;
+  },
+  /** Adds a client and their broker account in one step. The same client name finds the same client. */
+  async createAccount(a: { client_name: string; broker: string; user_id: string; secrets: Record<string, string>; fields: Record<string, string> }) {
+    const r = await call<{ id: string; client_id: string; created_client: boolean; status: Status }>("POST", "/accounts", a);
+    await api.loadOverview();
+    return r;
+  },
+  /** Changes saved details. Only what is sent replaces anything. */
+  async updateAccount(id: string, a: { user_id: string; secrets: Record<string, string>; fields: Record<string, string> }) {
+    const r = await call<{ status: Status }>("PUT", `/accounts/${id}`, a);
     await api.loadOverview();
     return r;
   },

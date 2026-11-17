@@ -140,7 +140,8 @@ pub fn router(state: AppState) -> Router {
         .route("/overview", get(overview))
         .route("/clients", post(add_client))
         .route("/clients/:id/accounts", post(add_account))
-        .route("/accounts/:id", delete(delete_account))
+        .route("/accounts", post(create_account))
+        .route("/accounts/:id", delete(delete_account).put(update_account))
         .route("/accounts/:id/enabled", post(set_enabled))
         .route("/accounts/:id/refresh", post(refresh_one))
         .route("/refresh", post(refresh_all))
@@ -229,6 +230,7 @@ async fn refresh_every_account(st: &AppState) {
 
 async fn overview(State(st): State<AppState>) -> ApiResult {
     let (clients, accounts, positions, margins) = blk(&st.db, |db| Ok((db.list_clients()?, db.list_accounts(None)?, db.latest_positions(None)?, db.latest_margins()?))).await?;
+    let blobs: HashMap<String, Vec<u8>> = blk(&st.db, |db| db.account_blobs()).await?.into_iter().collect();
     let status = st.status.lock().unwrap().clone();
     let margins: HashMap<String, _> = margins.into_iter().collect();
     let accounts: Vec<Value> = accounts
@@ -236,7 +238,9 @@ async fn overview(State(st): State<AppState>) -> ApiResult {
         .map(|a| {
             let s = Uuid::parse_str(&a.id).ok().and_then(|u| status.get(&u).cloned());
             let m = margins.get(&a.id);
-            json!({"account": a, "status": s, "margin": m})
+            // Which secrets are saved and the plain fields (mobile, redirect URL). Never a secret's value.
+            let (saved, fields) = blobs.get(&a.id).and_then(|b| open_creds(&st, b).ok()).map(|c| brokers::saved_view(&c)).unwrap_or_default();
+            json!({"account": a, "status": s, "margin": m, "saved": saved, "fields": fields})
         })
         .collect();
     Ok(Json(json!({"clients": clients, "accounts": accounts, "positions": positions})))
@@ -297,6 +301,124 @@ async fn add_account(State(st): State<AppState>, Path(client): Path<Uuid>, Json(
     // Saved either way; the first read tells the admin at once whether the details work.
     let status = refresh_account(&st, id).await;
     Ok(Json(json!({"id": id, "status": status})))
+}
+
+#[derive(Deserialize)]
+struct CreateBody {
+    /// An existing client, or a name: the same name (any case) finds the same client.
+    client_id: Option<Uuid>,
+    client_name: Option<String>,
+    client_code: Option<String>,
+    phone: Option<String>,
+    email: Option<String>,
+    broker: String,
+    #[serde(default)]
+    user_id: String,
+    label: Option<String>,
+    #[serde(default)]
+    secrets: BTreeMap<String, String>,
+    #[serde(default)]
+    fields: BTreeMap<String, String>,
+}
+
+fn trimmed(m: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    m.into_iter().map(|(k, v)| (k, v.trim().to_string())).collect()
+}
+
+/// Adds a client and their broker account in one step, the way the copy-trading desk adds an
+/// account: one row, Enter, signed in. Everything is checked before anything is created, so a
+/// typo never leaves an empty client behind.
+async fn create_account(State(st): State<AppState>, Json(b): Json<CreateBody>) -> ApiResult {
+    if !brokers::BROKERS.contains(&b.broker.as_str()) {
+        return Err(ApiError::bad(format!("unknown broker {}", b.broker)));
+    }
+    let creds = StoredCreds { user_id: b.user_id.trim().to_string(), secrets: trimmed(b.secrets), fields: trimmed(b.fields) };
+    let missing = brokers::missing(&b.broker, &creds);
+    if !missing.is_empty() {
+        return Err(ApiError::bad(format!("{} needs: {}", b.broker, missing.join(", "))));
+    }
+    let broker_user_id = brokers::broker_user_id(&creds);
+    let (broker, id_check) = (b.broker.clone(), broker_user_id.clone());
+    if blk(&st.db, move |db| db.account_exists(&broker, &id_check)).await? {
+        return Err(ApiError(StatusCode::CONFLICT, format!("a {} account {} is already added", b.broker, broker_user_id)));
+    }
+
+    // Which client: given, or found by name, or made now.
+    let name = clean(b.client_name);
+    let mut created = false;
+    let client_id = match (b.client_id, name) {
+        (Some(id), _) => {
+            if !blk(&st.db, move |db| db.client_exists(id)).await? {
+                return Err(ApiError(StatusCode::NOT_FOUND, "no such client".into()));
+            }
+            id
+        }
+        (None, None) => return Err(ApiError::bad("enter the client's name")),
+        (None, Some(name)) => {
+            let n = name.clone();
+            match blk(&st.db, move |db| db.find_client_by_name(&n)).await? {
+                Some(id) => id,
+                None => {
+                    let code = clean(b.client_code);
+                    let (phone, email) = (clean(b.phone), clean(b.email));
+                    created = true;
+                    blk(&st.db, move |db| {
+                        let code = match code {
+                            Some(c) => c,
+                            None => db.next_client_code()?,
+                        };
+                        db.add_client(&NewClient { client_code: code, name, email, phone, notes: None })
+                    })
+                    .await?
+                }
+            }
+        }
+    };
+
+    let label = clean(b.label).unwrap_or_else(|| format!("{} {}", b.broker, broker_user_id));
+    let sealed = st.vault.seal(&serde_json::to_vec(&creds).map_err(|e| ApiError::bad(e.to_string()))?);
+    let acct = NewAccount { client_id, broker: b.broker, broker_user_id, label, credentials: sealed };
+    let id = match blk(&st.db, move |db| db.add_account(&acct)).await {
+        Ok(id) => id,
+        Err(e) => {
+            if created {
+                let _ = blk(&st.db, move |db| db.delete_client_if_empty(client_id)).await;
+            }
+            return Err(e);
+        }
+    };
+    // Saved either way; the first read tells the admin at once whether the details work.
+    let status = refresh_account(&st, id).await;
+    Ok(Json(json!({"id": id, "client_id": client_id, "created_client": created, "status": status})))
+}
+
+#[derive(Deserialize)]
+struct UpdateBody {
+    #[serde(default)]
+    user_id: String,
+    #[serde(default)]
+    secrets: BTreeMap<String, String>,
+    #[serde(default)]
+    fields: BTreeMap<String, String>,
+}
+
+/// Changes an account's saved details. Only what was typed replaces anything, so fixing one
+/// wrong cell does not mean retyping the rest. Then it signs in again with the new details.
+async fn update_account(State(st): State<AppState>, Path(id): Path<Uuid>, Json(b): Json<UpdateBody>) -> ApiResult {
+    let (broker, _client, sealed, _user) = blk(&st.db, move |db| db.account_credentials(id)).await?;
+    let mut creds = open_creds(&st, &sealed).map_err(ApiError::bad)?;
+    brokers::merge_creds(&mut creds, &b.user_id, &b.secrets, &b.fields);
+    let missing = brokers::missing(&broker, &creds);
+    if !missing.is_empty() {
+        return Err(ApiError::bad(format!("{broker} needs: {}", missing.join(", "))));
+    }
+    let broker_user_id = brokers::broker_user_id(&creds);
+    let resealed = st.vault.seal(&serde_json::to_vec(&creds).map_err(|e| ApiError::bad(e.to_string()))?);
+    blk(&st.db, move |db| db.update_account_credentials(id, &broker_user_id, &resealed)).await?;
+    // New details mean a new sign-in: the held session belongs to the old ones.
+    st.live.lock().await.remove(&id);
+    let status = refresh_account(&st, id).await;
+    Ok(Json(json!({"status": status})))
 }
 
 async fn delete_account(State(st): State<AppState>, Path(id): Path<Uuid>) -> ApiResult {

@@ -131,6 +131,67 @@ impl Db {
         })
     }
 
+    /// A client by name, ignoring case and surrounding spaces. Adding a second broker for
+    /// "Ravi Menon" finds the same client instead of making a second one.
+    pub fn find_client_by_name(&self, name: &str) -> Result<Option<Uuid>> {
+        self.with(|c| {
+            let id: Option<String> = c
+                .query_row("SELECT CAST(id AS VARCHAR) FROM clients WHERE lower(trim(name)) = lower(trim(?)) ORDER BY created_at LIMIT 1", params![name], |r| r.get(0))
+                .optional()?;
+            Ok(id.and_then(|s| Uuid::parse_str(&s).ok()))
+        })
+    }
+
+    /// The next free client code: C001, C002 ... one past the highest number in use.
+    pub fn next_client_code(&self) -> Result<String> {
+        self.with(|c| {
+            let n: i64 = c.query_row(
+                "SELECT coalesce(max(try_cast(regexp_extract(client_code, '^C([0-9]+)$', 1) AS BIGINT)), 0) FROM clients",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok(format!("C{:03}", n + 1))
+        })
+    }
+
+    pub fn account_exists(&self, broker: &str, broker_user_id: &str) -> Result<bool> {
+        self.with(|c| Ok(c.query_row("SELECT count(*) FROM broker_accounts WHERE broker = ? AND broker_user_id = ?", params![broker, broker_user_id], |r| r.get::<_, i64>(0))? > 0))
+    }
+
+    /// Removes a client that has no broker account (used to undo a client made a moment ago).
+    pub fn delete_client_if_empty(&self, id: Uuid) -> Result<bool> {
+        self.with(|c| {
+            let n = c.execute(
+                "DELETE FROM clients WHERE id = CAST(? AS UUID) AND NOT EXISTS (SELECT 1 FROM broker_accounts a WHERE a.client_id = clients.id)",
+                params![id.to_string()],
+            )?;
+            Ok(n > 0)
+        })
+    }
+
+    /// Replaces an account's sealed credentials and its broker-side id (the id can change when a
+    /// wrong client code was typed). The old live session is the caller's to drop.
+    pub fn update_account_credentials(&self, id: Uuid, broker_user_id: &str, sealed: &[u8]) -> Result<()> {
+        self.with(|c| {
+            let n = c
+                .execute("UPDATE broker_accounts SET broker_user_id = ?, credentials = ? WHERE id = CAST(? AS UUID)", params![broker_user_id, sealed, id.to_string()])
+                .map_err(|e| clash(e, format!("another account already uses {broker_user_id}")))?;
+            if n == 0 {
+                return Err(Error::NotFound(format!("account {id}")));
+            }
+            Ok(())
+        })
+    }
+
+    /// Every account's sealed credentials, by account id, for building the "what is saved" view.
+    pub fn account_blobs(&self) -> Result<Vec<(String, Vec<u8>)>> {
+        self.with(|c| {
+            let mut stmt = c.prepare("SELECT CAST(id AS VARCHAR), credentials FROM broker_accounts")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
     pub fn client_exists(&self, id: Uuid) -> Result<bool> {
         self.with(|c| Ok(c.query_row("SELECT count(*) FROM clients WHERE id = CAST(? AS UUID)", params![id.to_string()], |r| r.get::<_, i64>(0))? > 0))
     }

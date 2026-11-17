@@ -121,3 +121,46 @@ fn an_account_with_history_cannot_be_deleted_but_a_fresh_one_can() {
     let e = db.delete_account(kept).unwrap_err().to_string();
     assert!(e.contains("disable it instead"), "{e}");
 }
+
+#[test]
+fn a_client_is_found_by_name_and_codes_count_up() {
+    let db = db();
+    assert_eq!(db.next_client_code().unwrap(), "C001");
+    let ravi = client(&db, "C001", "Ravi Menon");
+    client(&db, "C007", "Asha Rao");
+    assert_eq!(db.next_client_code().unwrap(), "C008", "one past the highest number, not the count");
+    client(&db, "FAMILY-A", "Other"); // a code in another style does not confuse the count
+    assert_eq!(db.next_client_code().unwrap(), "C008");
+    assert_eq!(db.find_client_by_name("  ravi MENON ").unwrap(), Some(ravi), "case and spaces are ignored");
+    assert_eq!(db.find_client_by_name("Nobody").unwrap(), None);
+}
+
+#[test]
+fn an_empty_client_can_be_undone_but_one_with_an_account_stays() {
+    let db = db();
+    let empty = client(&db, "C001", "Ravi");
+    assert!(db.delete_client_if_empty(empty).unwrap());
+    assert!(db.list_clients().unwrap().is_empty());
+    let kept = client(&db, "C002", "Asha");
+    account(&db, kept, "zerodha", "AB1234");
+    assert!(!db.delete_client_if_empty(kept).unwrap());
+    assert_eq!(db.list_clients().unwrap().len(), 1);
+}
+
+#[test]
+fn account_details_can_be_replaced_without_losing_the_account() {
+    let db = db();
+    let ravi = client(&db, "C001", "Ravi");
+    let a = account(&db, ravi, "zerodha", "AB1234");
+    let other = account(&db, ravi, "zerodha", "CD5678");
+    assert!(db.account_exists("zerodha", "AB1234").unwrap());
+    assert!(!db.account_exists("kotak", "AB1234").unwrap());
+
+    db.update_account_credentials(a, "AB9999", &[9, 9]).unwrap();
+    let (_, _, blob, user) = db.account_credentials(a).unwrap();
+    assert_eq!((blob, user.as_str()), (vec![9, 9], "AB9999"));
+    // The id cannot be changed to one another account already has.
+    let e = db.update_account_credentials(other, "AB9999", &[1]).unwrap_err();
+    assert!(matches!(e, Error::Duplicate(_)), "{e:?}");
+    assert!(db.account_blobs().unwrap().len() == 2);
+}

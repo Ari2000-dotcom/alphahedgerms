@@ -15,7 +15,7 @@ Read `docs/DESIGN.md` first. It is the plan; this file is the state.
 | Design | written (docs/DESIGN.md), reviewed by an advisor |
 | Database | DuckDB + Parquet: schema, fills without duplicates, tamper fingerprint, Parquet export, clients, accounts, position and margin snapshots. 20 tests |
 | Server | admin login, clients, broker accounts (sealed), sign-in, positions and margin read for Zerodha, Angel One, Kotak (Kotak positions unverified) |
-| Admin screen | built: sign-in, overview, clients, client page with adding broker accounts and per-broker hints, positions |
+| Admin screen | built: sign-in, overview, Clients grid (Add client = one inline row with the broker's sign-in columns and hints, Enter saves and signs in; the same client name adds another broker; saved rows editable), client page, positions |
 | Upstox and Nubra positions | not built |
 | Order sockets, trade capture, end-of-day sweep | not built (next) |
 | Strategies, tagging, reconciliation | not built |

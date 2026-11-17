@@ -57,6 +57,30 @@ pub fn missing(broker: &str, c: &StoredCreds) -> Vec<&'static str> {
         .collect()
 }
 
+/// Applies an edit to saved details. Only values actually typed replace anything, so an admin
+/// who changes one cell does not have to retype every secret.
+pub fn merge_creds(old: &mut StoredCreds, user_id: &str, secrets: &BTreeMap<String, String>, fields: &BTreeMap<String, String>) {
+    if !user_id.trim().is_empty() {
+        old.user_id = user_id.trim().to_string();
+    }
+    for (k, v) in secrets {
+        if !v.trim().is_empty() {
+            old.secrets.insert(k.clone(), v.trim().to_string());
+        }
+    }
+    for (k, v) in fields {
+        if !v.trim().is_empty() {
+            old.fields.insert(k.clone(), v.trim().to_string());
+        }
+    }
+}
+
+/// What is saved, without the values: which secrets exist, and the plain fields as they are.
+pub fn saved_view(c: &StoredCreds) -> (BTreeMap<String, bool>, BTreeMap<String, String>) {
+    let saved = c.secrets.iter().filter(|(_, v)| !v.trim().is_empty()).map(|(k, _)| (k.clone(), true)).collect();
+    (saved, c.fields.clone())
+}
+
 /// A broker's own id for the account: the client id, or the mobile where the broker has no id.
 pub fn broker_user_id(c: &StoredCreds) -> String {
     if !c.user_id.trim().is_empty() {
@@ -252,6 +276,29 @@ mod tests {
         let c = creds("  ", &[("apiKey", "  "), ("pin", ""), ("totpSecret", "t")], &[]);
         let m = missing("angel", &c);
         assert!(m.contains(&"Client code") && m.contains(&"API key") && m.contains(&"PIN") && !m.contains(&"TOTP secret"), "{m:?}");
+    }
+
+    #[test]
+    fn an_edit_replaces_only_what_was_typed() {
+        let mut c = creds("AB1234", &[("apiKey", "old-key"), ("pin", "1111"), ("totpSecret", "T")], &[("mobile", "+919800000001")]);
+        let map = |v: &[(&str, &str)]| v.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<BTreeMap<_, _>>();
+        merge_creds(&mut c, "  ", &map(&[("pin", "2222"), ("apiKey", "   ")]), &map(&[("mobile", "")]));
+        assert_eq!(c.user_id, "AB1234", "a blank id changes nothing");
+        assert_eq!(c.secrets["pin"], "2222", "the typed PIN replaced the old one");
+        assert_eq!(c.secrets["apiKey"], "old-key", "a blank secret keeps the saved one");
+        assert_eq!(c.secrets["totpSecret"], "T");
+        assert_eq!(c.fields["mobile"], "+919800000001", "a blank field keeps its value");
+        merge_creds(&mut c, "AB9999", &map(&[]), &map(&[("mobile", "+919811111111")]));
+        assert_eq!((c.user_id.as_str(), c.fields["mobile"].as_str()), ("AB9999", "+919811111111"));
+    }
+
+    #[test]
+    fn the_saved_view_never_holds_a_secret_value() {
+        let c = creds("AB1234", &[("apiKey", "SUPER-SECRET"), ("pin", "")], &[("mobile", "+919800000001")]);
+        let (saved, fields) = saved_view(&c);
+        assert_eq!(saved.keys().collect::<Vec<_>>(), ["apiKey"], "an empty secret is not saved");
+        assert!(!format!("{saved:?}{fields:?}").contains("SUPER-SECRET"));
+        assert_eq!(fields["mobile"], "+919800000001");
     }
 
     #[test]
