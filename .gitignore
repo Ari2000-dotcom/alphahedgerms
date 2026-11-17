@@ -1,0 +1,7 @@
+/target
+/pgdata
+/pglog.txt
+.env
+*.log
+node_modules/
+dist/
