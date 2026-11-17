@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { api, ApiError, overview, signedIn, type AccountView, type Client, type Position } from "./api";
 import { BROKER_ORDER, BROKERS, type BrokerId } from "./brokers";
-import { fail, go, Money, qty, say, toast } from "./ui";
+import { Avatar, fail, go, Money, qty, say, toast } from "./ui";
 import { ClientsGrid, startAdding } from "./clients";
 import * as I from "./icons";
 
@@ -96,16 +96,18 @@ function Shell({ children }: { children: preact.ComponentChildren }) {
       <div class="body">
         <nav class="nav" aria-label="Sections">
           <div class="navgroup">
+            <span class="navhead">Workspace</span>
             {NAV.map((n) =>
               n.live ? (
-                <a key={n.label} href={n.to} class={"navbtn" + (active(n.to) ? " on" : "")} aria-label={n.label} aria-current={active(n.to) ? "page" : undefined}>
+                <a key={n.label} href={n.to} class={"navbtn" + (active(n.to) ? " on" : "")} aria-current={active(n.to) ? "page" : undefined}>
                   <n.icon />
-                  <span class="tip" role="tooltip">{n.label}</span>
+                  <span class="lbl">{n.label}</span>
                 </a>
               ) : (
-                <button key={n.label} class="navbtn soon" aria-label={`${n.label}, not built yet`} onClick={() => say(`${n.label} is not built yet`)}>
+                <button key={n.label} class="navbtn soon" title={`${n.label} is not built yet`} onClick={() => say(`${n.label} is not built yet`)}>
                   <n.icon />
-                  <span class="tip" role="tooltip">{n.label}<em>Soon</em></span>
+                  <span class="lbl">{n.label}</span>
+                  <em class="soonmark">Soon</em>
                 </button>
               ),
             )}
@@ -120,12 +122,23 @@ function Shell({ children }: { children: preact.ComponentChildren }) {
 
 // ------------------------------------------------------------------ figures
 
+const FIG_ICON: Record<string, () => preact.JSX.Element> = {
+  "Accounts signed in": I.NavAccounts,
+  "Available margin": I.NavOverview,
+  "Used margin": I.NavRisk,
+  "Open positions": I.NavPositions,
+  "Open P&L": I.NavTrade,
+};
+
 function Figures({ items }: { items: { label: string; value: preact.ComponentChildren; sub?: string }[] }) {
   return (
     <div class="figures">
       {items.map((f) => (
         <div class="fig" key={f.label}>
-          <span class="lab">{f.label}</span>
+          <span class="figtop">
+            <span class="lab">{f.label}</span>
+            <span class="figicon">{FIG_ICON[f.label]?.()}</span>
+          </span>
           <b class="val">{f.value}</b>
           {f.sub && <small class="figsub">{f.sub}</small>}
         </div>
@@ -187,7 +200,7 @@ function PositionsTable({ rows, showClient = true, empty }: { rows: Position[]; 
             <tbody>
               {shown.map((p, i) => (
                 <tr class="rrow" key={`${p.account_id}-${p.trading_symbol}-${p.product}-${i}`} style={{ "--i": Math.min(i, 14) } as never}>
-                  {showClient && <td class="name"><a href={`#/clients/${p.client_id}`}>{p.client_name}</a></td>}
+                  {showClient && <td class="name"><a class="who" href={`#/clients/${p.client_id}`}><Avatar name={p.client_name} />{p.client_name}</a></td>}
                   <td class="sub">{BROKERS[p.broker as BrokerId]?.name ?? p.broker} · {p.account_label.replace(/^\w+ /, "")}</td>
                   <td class="name">{p.trading_symbol}</td>
                   <td>{p.product}</td>
@@ -239,7 +252,7 @@ function Overview() {
           { label: "Available margin", value: <Money n={t.available} /> },
           { label: "Used margin", value: <Money n={t.used} /> },
           { label: "Open positions", value: t.open },
-          { label: "P&L on open positions", value: <Money n={t.pnl} plus tone /> },
+          { label: "Open P&L", value: <Money n={t.pnl} plus tone /> },
         ]}
       />
       {trouble.length > 0 && (
@@ -437,7 +450,7 @@ function ClientPage({ id }: { id: string }) {
           { label: "Available margin", value: <Money n={t.available} /> },
           { label: "Used margin", value: <Money n={t.used} /> },
           { label: "Open positions", value: t.open },
-          { label: "P&L on open positions", value: <Money n={t.pnl} plus tone /> },
+          { label: "Open P&L", value: <Money n={t.pnl} plus tone /> },
         ]}
       />
       {adding && <AddAccount client={client} onDone={() => setAdding(false)} />}

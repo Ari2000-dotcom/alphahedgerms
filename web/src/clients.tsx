@@ -6,7 +6,7 @@ import { useMemo, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { api, overview, type AccountView } from "./api";
 import { BROKERS, BROKER_ORDER, CRED_COLS, fieldFor, type BrokerId, type Field } from "./brokers";
-import { fail, go, Money, say } from "./ui";
+import { Avatar, fail, go, Money, say } from "./ui";
 import * as I from "./icons";
 
 // ------------------------------------------------------------------- edits
@@ -197,7 +197,7 @@ function Row({ a, i, ps, names }: { a: AccountView; i: number; ps: { open: numbe
     <>
       <tr class={"rrow" + (isNew ? " new" : "") + (isDirty && !isNew ? " dirty" : "")} style={{ "--i": Math.min(i, 14) } as never}>
         <td class={isNew ? "cellc" : "name"}>
-          {isNew ? nameInput : <a href={`#/clients/${a.account.client_id}`}>{a.account.client_name}</a>}
+          {isNew ? nameInput : <a class="who" href={`#/clients/${a.account.client_id}`}><Avatar name={a.account.client_name} />{a.account.client_name}</a>}
         </td>
         <td class="sub">{isNew ? (names.includes((d.client_name ?? "").trim().toLowerCase()) ? "existing" : "auto") : a.account.client_code}</td>
         <td class={isNew ? "cellc" : ""}>

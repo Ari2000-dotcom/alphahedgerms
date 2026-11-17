@@ -25,4 +25,11 @@ export function Money({ n, plus = false, tone = false }: { n: number | null | un
   );
 }
 
+/** A rounded square with the person's initials. */
+export function Avatar({ name }: { name: string }) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const text = ((parts[0]?.[0] ?? "?") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
+  return <span class="avatar" aria-hidden="true">{text}</span>;
+}
+
 export const qty = (n: number) => (n === 0 ? "0" : n.toLocaleString("en-IN"));
