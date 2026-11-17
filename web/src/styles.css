@@ -451,15 +451,15 @@ select.cellin option { background: var(--s1); color: var(--ts); }
 
 
 /* ===================================================================== Alphahedge RMS, high-profile pass =====================================================================
-   One cool graphite family with a blue undertone, brighter text, a stronger sky accent, bigger type
+   One neutral grey family, no tint, brighter text, a stronger sky accent, bigger type
    and rows, a labelled side bar, figure cards, initials avatars and status pills. */
 :root, :root[data-theme="dark"] {
-  --chrome: #090b0f; --well: #080a0d; --workspace: #0d1015; --canvas: #141922;
-  --head: #1a2029; --group: #1e2530;
-  --s1: #171d26; --s2: #202733; --s3: #2c3442;
-  --line: #222a36; --line2: #343e4e;
+  --chrome: #141414; --well: #0e0e0e; --workspace: #262626; --canvas: #1d1d1d;
+  --head: #252525; --group: #2c2c2c;
+  --s1: #222222; --s2: #2d2d2d; --s3: #3a3a3a;
+  --line: #313131; --line2: #474747;
   --scrim: rgb(4 6 9 / 72%);
-  --ts: #f4f7fb; --t1: #dbe1ea; --t2: #b0b9c6; --t3: #8d98a8; --td: #627084;
+  --ts: #f5f5f5; --t1: #dcdcdc; --t2: #b4b4b4; --t3: #959595; --td: #6a6a6a;
   --profit: #4fc592; --loss: #f0766a; --warn: #e6a550; --ok: #55c999;
   --loss-bg: rgb(240 118 106 / 14%); --warn-bg: rgb(230 165 80 / 14%); --ok-bg: rgb(85 201 153 / 14%);
   --sky: #72c2f7; --sky-ink: #06202f; --sky-hover: #94d2fa;
@@ -471,8 +471,8 @@ select.cellin option { background: var(--s1); color: var(--ts); }
 body {
   font-size: 14px; line-height: 1.45; color: var(--t1);
   background:
-    radial-gradient(900px 420px at 12% -8%, rgb(114 194 247 / 10%), transparent 70%),
-    radial-gradient(700px 380px at 100% 0%, rgb(114 194 247 / 5%), transparent 70%),
+    radial-gradient(1000px 460px at 14% -10%, rgb(255 255 255 / 7%), transparent 70%),
+    radial-gradient(700px 380px at 100% 0%, rgb(114 194 247 / 6%), transparent 70%),
     var(--workspace);
   background-attachment: fixed;
 }
@@ -481,7 +481,7 @@ h2 { font-size: 16px; letter-spacing: -0.01em; }
 .lab { color: var(--t2); }
 
 /* top bar: glass over the page, brand on the left */
-.top { height: 56px; padding: 0 18px 0 16px; gap: 12px; background: rgb(9 11 15 / 72%); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
+.top { height: 56px; padding: 0 18px 0 16px; gap: 12px; background: rgb(20 20 20 / 78%); backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
 .brand { gap: 10px; }
 .brand b { font-size: 15px; letter-spacing: -0.01em; }
 .mark { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(145deg, #9ad6fb, #4aa6e4); color: #06202f; box-shadow: 0 4px 14px rgb(114 194 247 / 28%), inset 0 1px 0 rgb(255 255 255 / 35%); }
@@ -596,3 +596,33 @@ main { padding: 26px 32px 48px; }
 .toast { background: var(--s3); color: var(--ts); border: 1px solid var(--line2); box-shadow: var(--raise); border-radius: 10px; padding: 11px 18px; }
 @media (max-width: 900px) { .nav { width: 64px; padding: 12px 8px; } .navbtn .lbl, .soonmark, .navhead { display: none; } .navbtn { justify-content: center; padding: 0; } main { padding: 18px 16px 40px; } }
 @media (max-width: 760px) { .nav { display: none; } }
+
+/* ---- finishing: depth, texture, quiet scrollbars ---- */
+body { font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; }
+body::after { content: ""; position: fixed; inset: 0; z-index: 70; pointer-events: none; opacity: .05; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+.canvas, .fig, .addpanel, .logincard { box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%), 0 14px 32px -18px rgb(0 0 0 / 80%); }
+.fig:hover { box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%), 0 18px 36px -18px rgb(114 194 247 / 25%); }
+.rtable tbody .rrow:hover td { background: linear-gradient(rgb(255 255 255 / 3.5%), rgb(255 255 255 / 3.5%)), var(--canvas); }
+.rtable th { letter-spacing: .01em; }
+* { scrollbar-width: thin; scrollbar-color: var(--s3) transparent; }
+.nav { background: linear-gradient(180deg, #181818, var(--chrome)); }
+.navbtn.on { background: linear-gradient(90deg, var(--sky-bg-2), rgb(114 194 247 / 6%)); }
+.strip h1::after { content: ""; display: block; width: 28px; height: 3px; margin-top: 8px; border-radius: 2px; background: var(--sky); opacity: .9; }
+
+/* ---- narrow windows: tab bar at the bottom, quieter top bar ---- */
+.issue .state { height: auto; padding: 0; background: none; color: var(--ts); }
+@media (max-width: 760px) {
+  .status, .badge.paper { display: none; }
+  .top { height: 52px; }
+  .brand b { white-space: nowrap; }
+  .nav { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; width: auto; height: 60px; padding: 6px 12px; flex-direction: row; border-right: 0; border-top: 1px solid var(--line); background: rgb(20 20 20 / 92%); backdrop-filter: blur(14px); }
+  .navgroup { flex-direction: row; justify-content: space-around; width: 100%; gap: 4px; }
+  .navhead, .navbtn.soon { display: none; }
+  .navbtn { flex: 1; flex-direction: column; justify-content: center; gap: 3px; height: 48px; padding: 0; font-size: 11px; }
+  .navbtn .lbl { flex: none; }
+  .navbtn.on::before { display: none; }
+  main { padding: 18px 16px 84px; }
+  .toast { bottom: 76px; }
+}
+@media (max-width: 760px) { .navbtn .lbl { display: block; } }
