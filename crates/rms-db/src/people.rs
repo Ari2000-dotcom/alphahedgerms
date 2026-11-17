@@ -71,6 +71,8 @@ pub struct PositionView {
     pub broker: String,
     pub account_label: String,
     pub taken_at: String,
+    /// The strategy this position is a leg of, or none while it is unassigned.
+    pub strategy_id: Option<String>,
     #[serde(flatten)]
     pub position: PositionRow,
 }
@@ -328,10 +330,12 @@ impl Db {
         self.with(|conn| {
             let sql = "SELECT CAST(a.id AS VARCHAR), CAST(a.client_id AS VARCHAR), c.name, a.broker, a.label, CAST(p.taken_at AS VARCHAR),
                               p.trading_symbol, p.segment, p.token, p.product, p.net_quantity,
-                              CAST(p.average_price AS DOUBLE), CAST(p.last_price AS DOUBLE), CAST(p.pnl AS DOUBLE)
+                              CAST(p.average_price AS DOUBLE), CAST(p.last_price AS DOUBLE), CAST(p.pnl AS DOUBLE),
+                              CAST(t.strategy_id AS VARCHAR)
                        FROM position_snapshots p
                        JOIN broker_accounts a ON a.id = p.account_id
                        JOIN clients c ON c.id = a.client_id
+                       LEFT JOIN position_tags t ON t.account_id = p.account_id AND t.trading_symbol = p.trading_symbol AND t.product = p.product
                        WHERE a.enabled AND p.run_id = (SELECT max(r.id) FROM position_runs r WHERE r.account_id = p.account_id)
                          AND (? IS NULL OR a.client_id = CAST(? AS UUID))
                        ORDER BY c.name, a.label, p.trading_symbol";
@@ -345,6 +349,7 @@ impl Db {
                     broker: r.get(3)?,
                     account_label: r.get(4)?,
                     taken_at: r.get(5)?,
+                    strategy_id: r.get(14)?,
                     position: PositionRow {
                         trading_symbol: r.get(6)?,
                         segment: r.get(7)?,

@@ -8,7 +8,9 @@
     "build": "tsc --noEmit && vite build"
   },
   "dependencies": {
+    "@phosphor-icons/core": "^2.1.1",
     "@preact/signals": "^2.11.4",
+    "lucide-preact": "^1.74.0",
     "preact": "^11.2.0"
   },
   "devDependencies": {

@@ -69,7 +69,7 @@ CREATE TABLE instruments (
     strike          DECIMAL(18, 4),
     lot_size        INTEGER,
     tick_size       DECIMAL(18, 4),
-    updated_on      DATE NOT NULL DEFAULT current_date,
+    updated_on      DATE,                            -- set by the code that loads instruments (no DEFAULT current_date: it needs DuckDB's icu add-on)
     PRIMARY KEY (segment, token)
 );
 CREATE INDEX instruments_symbol ON instruments (trading_symbol);

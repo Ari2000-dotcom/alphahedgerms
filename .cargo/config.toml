@@ -1,0 +1,8 @@
+# One feature set for every command, so DuckDB (a C++ build of several GB) is compiled once and
+# shared by build, check and test. `-p rms-server` against `-p rms-db` selects different features
+# and makes Cargo build it again. Use these, or add --workspace yourself.
+[alias]
+b = "build --workspace"
+c = "check --workspace"
+t = "test --workspace"
+r = "build --workspace --release"

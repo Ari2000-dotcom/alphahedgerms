@@ -67,12 +67,31 @@ export interface Position {
   average_price: number | null;
   last_price: number | null;
   pnl: number | null;
+  /** The strategy this position is a leg of; null while it is not in one. */
+  strategy_id: string | null;
+}
+
+export interface Strategy {
+  id: string;
+  client_id: string;
+  tag: string;
+  name: string;
+  status: string;
+  created_at: string;
+  legs: number;
+}
+
+export interface Leg {
+  account_id: string;
+  trading_symbol: string;
+  product: string;
 }
 
 export interface Overview {
   clients: Client[];
   accounts: AccountView[];
   positions: Position[];
+  strategies: Strategy[];
 }
 
 /** null until the first answer: the page shows nothing rather than a flash of the sign-in form. */
@@ -159,6 +178,39 @@ export const api = {
   async setEnabled(id: string, enabled: boolean) {
     await call("POST", `/accounts/${id}/enabled`, { enabled });
     await api.loadOverview();
+  },
+  /** Puts positions into a strategy: an existing one, or a new one named for the client. */
+  async tagLegs(b: { strategy_id?: string; client_id?: string; new_name?: string; legs: Leg[] }) {
+    const r = await call<{ strategy: Strategy; tagged: number }>("POST", "/strategies/tag", b);
+    await api.loadOverview();
+    return r;
+  },
+  async untagLegs(legs: Leg[]) {
+    const r = await call<{ untagged: number }>("POST", "/strategies/untag", { legs });
+    await api.loadOverview();
+    return r.untagged;
+  },
+  async renameStrategy(id: string, name: string) {
+    await call("PUT", `/strategies/${id}`, { name });
+    await api.loadOverview();
+  },
+  async deleteStrategy(id: string) {
+    await call("DELETE", `/strategies/${id}`);
+    await api.loadOverview();
+  },
+  /** Asks the server for a one-time reset code. The code itself is never returned: it is saved in a file on the server. */
+  async forgot() {
+    return call<{ minutes: number; file: string }>("POST", "/forgot");
+  },
+  async resetPassword(code: string, next: string) {
+    await call("POST", "/reset", { code, new: next });
+    // The server signs this browser in as part of the reset.
+    signedIn.value = true;
+    await api.loadOverview();
+  },
+  /** The current password must be right. Other signed-in sessions end; this one stays. */
+  async changePassword(current: string, next: string) {
+    await call("POST", "/password", { current, new: next });
   },
   async deleteAccount(id: string) {
     await call("DELETE", `/accounts/${id}`);

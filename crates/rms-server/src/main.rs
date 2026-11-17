@@ -79,7 +79,10 @@ async fn main() {
     let state = api::AppState {
         db: db.clone(),
         vault: Arc::new(Vault::new(&secrets.vault_key)),
-        admin_password: Arc::new(secrets.admin_password),
+        admin_password: Arc::new(std::sync::RwLock::new(secrets.admin_password)),
+        reset: Arc::new(Mutex::new(None)),
+        data_dir: Arc::new(data_dir.clone()),
+        guard: Arc::new(Mutex::new(api::LoginGuard::default())),
         sessions: Arc::new(Mutex::new(HashMap::new())),
         live: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         status: Arc::new(Mutex::new(HashMap::new())),

@@ -54,9 +54,9 @@ fn fill(client: Uuid, acct: Uuid, key: &str) -> NewFill {
 #[test]
 fn the_schema_applies_once_and_again_safely() {
     let db = db();
-    assert_eq!(db.applied_migrations().unwrap(), vec![(1, "init".to_string())]);
+    assert_eq!(db.applied_migrations().unwrap(), vec![(1, "init".to_string()), (2, "position_tags".to_string())]);
     db.migrate().unwrap(); // a second run changes nothing and does not fail
-    assert_eq!(db.applied_migrations().unwrap().len(), 1);
+    assert_eq!(db.applied_migrations().unwrap().len(), 2);
 }
 
 #[test]

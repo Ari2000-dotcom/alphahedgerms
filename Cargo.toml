@@ -25,6 +25,13 @@ lto = true
 codegen-units = 1
 strip = true
 
+# Why target\ reached 35 GB: debug info (every test binary alone had a 500 MB .pdb, and DuckDB's C++ objects
+# and rlib carried it too), and three separate DuckDB builds, one for each different `-p` selection of
+# `cargo build/test/check`. No debug info, and always `--workspace` (see .cargo\config.toml), keeps one
+# small copy. Breakpoint debugging of this code would need `debug = 1` here.
+[profile.dev]
+debug = 0
+
 # Windows: a scanner watching target\ can race rustc ("OS error 32"); one codegen unit avoids it.
 [profile.dev.build-override]
 codegen-units = 1

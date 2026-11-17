@@ -18,9 +18,10 @@ use std::sync::{Arc, Mutex};
 pub mod fills;
 pub mod model;
 pub mod people;
+pub mod strategies;
 
 /// Schema versions, applied in order, each once. Compiled into the program.
-const MIGRATIONS: &[(i32, &str, &str)] = &[(1, "init", include_str!("../sql/0001_init.sql"))];
+const MIGRATIONS: &[(i32, &str, &str)] = &[(1, "init", include_str!("../sql/0001_init.sql")), (2, "position_tags", include_str!("../sql/0002_position_tags.sql"))];
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -37,6 +38,24 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// DuckDB can load add-ons ("extensions") on demand: icu for time-zone work and parquet for the archive.
+/// The server needs neither to run (the schema and every query it makes avoid them), and on a server that
+/// cannot download them, or whose Windows refuses to load them, touching one fails or crashes. So:
+///  * RMS_NO_EXTENSIONS=1 switches loading and downloading off completely, so anything that would need
+///    an extension fails at once with a clear error (run the tests with it to prove the server needs none);
+///  * RMS_EXTENSION_DIR=<folder> reads extensions from that folder instead of the user's home folder.
+fn configure_extensions(conn: &Connection) -> Result<()> {
+    let on = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    if on("RMS_NO_EXTENSIONS").is_some() {
+        conn.execute_batch("SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;")?;
+    }
+    if let Some(dir) = on("RMS_EXTENSION_DIR") {
+        let lit = dir.trim().replace('\\', "/").replace('\'', "''");
+        conn.execute_batch(&format!("SET extension_directory = '{lit}'"))?;
+    }
+    Ok(())
+}
+
 /// A handle to the RMS database. Cheap to clone; all clones share one connection.
 #[derive(Clone)]
 pub struct Db {
@@ -49,12 +68,16 @@ impl Db {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| Error::Other(format!("cannot create {}: {e}", dir.display())))?;
         }
-        Ok(Self { conn: Arc::new(Mutex::new(Connection::open(path)?)) })
+        let conn = Connection::open(path)?;
+        configure_extensions(&conn)?;
+        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
     /// A throwaway database in memory (tests).
     pub fn open_in_memory() -> Result<Self> {
-        Ok(Self { conn: Arc::new(Mutex::new(Connection::open_in_memory()?)) })
+        let conn = Connection::open_in_memory()?;
+        configure_extensions(&conn)?;
+        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
     /// Runs `f` with the connection. Keep `f` short: all callers share it.
@@ -126,6 +149,7 @@ impl Db {
             ("orders without an account", "SELECT count(*) FROM orders o WHERE NOT EXISTS (SELECT 1 FROM broker_accounts a WHERE a.id = o.account_id)"),
             ("accounts without a client", "SELECT count(*) FROM broker_accounts a WHERE NOT EXISTS (SELECT 1 FROM clients c WHERE c.id = a.client_id)"),
             ("assignments to a missing strategy", "SELECT count(*) FROM current_assignments x WHERE NOT EXISTS (SELECT 1 FROM strategies s WHERE s.id = x.strategy_id)"),
+            ("position tags to a missing strategy", "SELECT count(*) FROM position_tags t WHERE NOT EXISTS (SELECT 1 FROM strategies s WHERE s.id = t.strategy_id)"),
             ("lots without a fill", "SELECT count(*) FROM lots l WHERE NOT EXISTS (SELECT 1 FROM fills f WHERE f.id = l.open_fill_id)"),
         ];
         self.with(|c| {

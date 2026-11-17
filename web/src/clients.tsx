@@ -260,15 +260,17 @@ function HintBar({ a, names }: { a: AccountView; names: Map<string, string> }) {
   const existing = isNew ? names.get((d.client_name ?? "").trim().toLowerCase()) : undefined;
   return (
     <div class="hintbar" role="status">
-      <b>{isNew ? `${def.name} needs` : `Editing ${a.account.client_name}: ${def.name}`}</b>
-      {def.fields.map((f) => (
-        <span key={f.key} class={"need" + (done(f) ? " done" : "")} title={f.where}>{done(f) && <I.Check />}{f.label}</span>
-      ))}
-      <span class="next">
-        {next ? <><strong>{next.label}.</strong> {next.where}</> : isNew ? "All filled in. Press Enter, or the tick at the end of the row, to add the client and sign in." : "Press Enter, or the tick at the end of the row, to save and sign in again."}
-      </span>
-      {existing && <span class="next">This name is already a client ({existing}). The new account is added to them.</span>}
-      {!existing && isNew && next && def.note && <span class="next">{def.note}</span>}
+      <div class="hhead">
+        <span class="htitle">{isNew ? `${def.name} needs` : `Editing ${a.account.client_name}: ${def.name}`}</span>
+        {def.fields.map((f) => (
+          <span key={f.key} class={"need" + (done(f) ? " done" : f === next ? " now" : "")} title={f.where}>{done(f) && <I.Check />}{f.label}</span>
+        ))}
+      </div>
+      <p class="hline">
+        {next ? <><span class="what">{next.label}.</span> {next.where}</> : isNew ? "All filled in. Press Enter, or the tick at the end of the row, to add the client and sign in." : "Press Enter, or the tick at the end of the row, to save and sign in again."}
+      </p>
+      {existing && <p class="hline">This name is already a client ({existing}). The new account is added to them.</p>}
+      {!existing && isNew && next && def.note && <p class="hline">{def.note}</p>}
     </div>
   );
 }

@@ -15,7 +15,13 @@ cd web && npm run build
 cargo run -p rms-server        # serves the site and API on 127.0.0.1:8090
 ```
 
-First run writes `.env` with `RMS_ADMIN_PASSWORD` and `RMS_VAULT_KEY`. Env: `RMS_DATA_DIR` (default `data`), `RMS_BIND`, `RMS_WEB_DIR` (default `web/dist`). `target` can reach about 16 GB and is safe to delete.
+First run writes `.env` with `RMS_ADMIN_PASSWORD` and `RMS_VAULT_KEY`. Env: `RMS_DATA_DIR` (default `data`), `RMS_BIND`, `RMS_WEB_DIR` (default `web/dist`).
+
+Cargo: use the aliases in `.cargo/config.toml` (`cargo b`, `cargo c`, `cargo t`, `cargo r`), all `--workspace`. `-p rms-server` and `-p rms-db` pick different feature sets, so Cargo compiled DuckDB (C++, several GB) once per selection: with full debug info that made `target` 35 GB. `[profile.dev] debug = 0` plus the aliases keep it near 2 GB (about 5 GB with release). `target` is safe to delete (stop `rms-server` first: a running exe locks it).
+
+Hosting on the VPS (Windows, beside MarketHub): `cargo r`, `cd web && npm run build`, then `deploy\make-package.ps1` makes `..\Alphahedge-RMS-VPS` (+ zip) with no secrets. On the VPS `Alphahedge RMS Server.bat` installs the task "Alphahedge RMS" (port 127.0.0.1:8090), adds only `caddy\sites\rms.caddy` to MarketHub's Caddy (validated before any reload, `-NoReload` to defer), and schedules a 03:30 backup of `rms\.env` + `rms\data`. See `deploy\README-VPS.txt`.
+
+DuckDB add-ons: the server must need none. DuckDB downloads `icu` and `parquet` on first use, and on the VPS that failed (no download; the icu DLL then crashed on load). Only `DEFAULT current_date` in 0001 and `CAST(timestamptz AS DATE)` need icu, and the parquet export needs parquet. The VPS runs with `RMS_NO_EXTENSIONS=1` (never download or load one). Prove it after any SQL change: `RMS_NO_EXTENSIONS=1 cargo t --no-fail-fast` (only the parquet export test may fail). Avoid `current_date`, `date_trunc`, `strftime` and timestamptz-to-date casts in server code; the export job, when wired, must run where the add-ons work.
 
 Look at the screens without a server: `cd web && npx vite --port 5290`, then open `http://127.0.0.1:5290/?mock`. Stop it by process id, never with a broad `taskkill` on node.
 

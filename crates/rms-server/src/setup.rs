@@ -67,3 +67,27 @@ pub fn ensure() -> Secrets {
 fn read_env_text_ends_with_newline() -> bool {
     std::fs::read_to_string(".env").map(|t| t.is_empty() || t.ends_with('\n')).unwrap_or(true)
 }
+
+/// Writes the admin password into `.env`: the RMS_ADMIN_PASSWORD line is replaced (or added), every other
+/// line is kept as it is. Written to a temporary file and renamed, so a crash never leaves a half file.
+pub fn save_admin_password(new: &str) -> std::io::Result<()> {
+    let text = std::fs::read_to_string(".env").unwrap_or_default();
+    let mut out = String::new();
+    let mut done = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("RMS_ADMIN_PASSWORD=") {
+            if !done {
+                out.push_str(&format!("RMS_ADMIN_PASSWORD={new}\n"));
+                done = true;
+            }
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !done {
+        out.push_str(&format!("RMS_ADMIN_PASSWORD={new}\n"));
+    }
+    std::fs::write(".env.tmp", out)?;
+    std::fs::rename(".env.tmp", ".env")
+}

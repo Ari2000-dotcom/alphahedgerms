@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { api, ApiError, overview, signedIn, type AccountView, type Client, type Position } from "./api";
 import { BROKER_ORDER, BROKERS, type BrokerId } from "./brokers";
-import { Avatar, fail, go, Money, qty, say, toast } from "./ui";
+import { fail, go, Money, say, toast } from "./ui";
 import { ClientsGrid, startAdding } from "./clients";
 import * as I from "./icons";
+import { PositionsTable } from "./positions";
+import { ForgotPanel, PasswordSheet, passwordOpen } from "./account";
 
 // -------------------------------------------------------------------- state
 
@@ -29,8 +31,10 @@ async function readBrokers() {
 
 function Login() {
   const [pw, setPw] = useState("");
+  const [show, setShow] = useState(false);
   const [err, setErr] = useState("");
   const [wait, setWait] = useState(false);
+  const [forgot, setForgot] = useState(false);
   async function submit(e: Event) {
     e.preventDefault();
     if (!pw || wait) return;
@@ -45,18 +49,35 @@ function Login() {
       setWait(false);
     }
   }
+  if (forgot) {
+    return (
+      <div class="login">
+        <div class="logincard"><ForgotPanel onBack={() => setForgot(false)} /></div>
+      </div>
+    );
+  }
   return (
     <div class="login">
       <form class="logincard" onSubmit={submit}>
-        <span class="mark big"><I.Mark /></span>
-        <h1>Alphahedge RMS</h1>
-        <p class="sub">Admin sign-in</p>
+        <div class="loginhead">
+          <span class="mark big"><I.Mark /></span>
+          <h1>Alphahedge RMS</h1>
+          <p class="sub">Sign in to the admin console</p>
+        </div>
         <label class="fld">
           <span class="lab">Password</span>
-          <input type="password" autocomplete="current-password" value={pw} autofocus onInput={(e) => setPw(e.currentTarget.value)} aria-invalid={err ? "true" : undefined} />
+          <span class="inputwrap" data-invalid={err ? "true" : undefined}>
+            <I.Lock />
+            {show
+              ? <input type="text" autocomplete="off" spellcheck={false} value={pw} autofocus onInput={(e) => setPw(e.currentTarget.value)} aria-invalid={err ? "true" : undefined} />
+              : <input type="password" autocomplete="current-password" value={pw} autofocus onInput={(e) => setPw(e.currentTarget.value)} aria-invalid={err ? "true" : undefined} />}
+            <button type="button" class="ic reveal" onClick={() => setShow(!show)} aria-label={show ? "Hide password" : "Show password"} aria-pressed={show}>{show ? <I.EyeOff /> : <I.Eye />}</button>
+          </span>
         </label>
         {err && <p class="banner" role="alert">{err}</p>}
-        <button class="btn primary" type="submit" disabled={wait || !pw}>{wait ? "Checking…" : "Sign in"}</button>
+        <button class="btn primary lg" type="submit" disabled={wait || !pw}>{wait ? <><span class="spin"><I.Refresh /></span> Checking…</> : <>Sign in <I.ArrowNext /></>}</button>
+        <button type="button" class="linkbtn forgotlink" onClick={() => setForgot(true)}>Forgot password?</button>
+        <p class="loginnote">Administrator access only. Sessions end when you sign out.</p>
       </form>
     </div>
   );
@@ -64,7 +85,7 @@ function Login() {
 
 // ------------------------------------------------------------------- shell
 
-const NAV: { label: string; to: string; icon: () => preact.JSX.Element; live: boolean }[] = [
+const NAV: { label: string; to: string; icon: (p: { on?: boolean }) => preact.JSX.Element; live: boolean }[] = [
   { label: "Overview", to: "#/", icon: I.NavOverview, live: true },
   { label: "Clients", to: "#/clients", icon: I.NavAccounts, live: true },
   { label: "Positions", to: "#/positions", icon: I.NavPositions, live: true },
@@ -73,48 +94,76 @@ const NAV: { label: string; to: string; icon: () => preact.JSX.Element; live: bo
   { label: "Risk limits", to: "", icon: I.NavRisk, live: false },
 ];
 
+const RAIL_KEY = "rms.nav.rail";
+const rail = signal(((): boolean => { try { return localStorage.getItem(RAIL_KEY) === "1"; } catch { return false; } })());
+function toggleRail() {
+  rail.value = !rail.value;
+  try { localStorage.setItem(RAIL_KEY, rail.value ? "1" : "0"); } catch { /* storage blocked: the choice lasts this visit only */ }
+}
+
 function Shell({ children }: { children: preact.ComponentChildren }) {
   const r = route.value;
   const active = (to: string) => (to === "#/" ? r === "#/" || r === "" : r.startsWith(to));
   const last = overview.value?.accounts.map((a) => a.status?.at).filter(Boolean).sort().pop();
+  // The read gets old quietly (a closed laptop, a stopped server): after 3 minutes the bar says so, in amber.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => tick((n) => n + 1), 30000);
+    return () => clearInterval(t);
+  }, []);
+  const ageMin = last ? Math.floor((Date.now() - new Date(last).getTime()) / 60000) : 0;
+  const stale = !!last && ageMin >= 3 && !busy.value;
+  const page = NAV.find((n) => n.live && n.to !== "" && active(n.to))?.label ?? (r.startsWith("#/clients/") ? "Client" : "Overview");
+  useEffect(() => { document.title = `${page} · Alphahedge RMS`; }, [page]);
   return (
-    <div class="shell">
+    <div class={"shell" + (rail.value ? " rail" : "")}>
       <header class="top">
+        <button class="ic navtoggle" onClick={toggleRail} aria-label={rail.value ? "Show side bar" : "Hide side bar"} aria-expanded={!rail.value} title={rail.value ? "Show side bar" : "Hide side bar"}>
+          <I.Sidebar />
+        </button>
         <div class="brand">
           <span class="mark"><I.Mark /></span>
           <b>Alphahedge RMS</b>
         </div>
-        <span class="badge paper">Admin</span>
+        <span class="crumb" aria-hidden="true"><i>/</i>{NAV.find((n) => n.live && active(n.to) && n.to !== "")?.label ?? "Client"}</span>
         <span class="grow" />
-        <span class="status">{last ? `Last read from brokers ${new Date(last).toLocaleTimeString("en-IN")}` : "Not read from brokers yet"}</span>
+        <span class={"status" + (stale ? " stale" : "")} title={last ? `Last read ${new Date(last).toLocaleString("en-IN")}` : undefined}><i class={"dot" + (last && !stale ? " ok" : "")} />{last ? (stale ? `Last read ${ageMin >= 60 ? `${Math.floor(ageMin / 60)} h` : `${ageMin} min`} ago` : `Last read ${new Date(last).toLocaleTimeString("en-IN")}`) : "Not read from brokers yet"}</span>
         <button class="btn" disabled={busy.value} onClick={readBrokers} title="Sign in where needed and read every account's positions and margin now">
           <span class={busy.value ? "spin" : ""}><I.Refresh /></span>
           {busy.value ? "Reading…" : "Read brokers"}
         </button>
-        <button class="btn quiet" onClick={() => api.logout().catch(fail)}>Sign out</button>
+        <span class="vbar" aria-hidden="true" />
+        <button class="btn quiet" onClick={() => api.logout().catch(fail)}><I.LogOut /> Sign out</button>
       </header>
       <div class="body">
         <nav class="nav" aria-label="Sections">
           <div class="navgroup">
             <span class="navhead">Workspace</span>
-            {NAV.map((n) =>
-              n.live ? (
-                <a key={n.label} href={n.to} class={"navbtn" + (active(n.to) ? " on" : "")} aria-current={active(n.to) ? "page" : undefined}>
-                  <n.icon />
-                  <span class="lbl">{n.label}</span>
-                </a>
-              ) : (
-                <button key={n.label} class="navbtn soon" title={`${n.label} is not built yet`} onClick={() => say(`${n.label} is not built yet`)}>
-                  <n.icon />
-                  <span class="lbl">{n.label}</span>
-                  <em class="soonmark">Soon</em>
-                </button>
-              ),
-            )}
+            {NAV.filter((n) => n.live).map((n) => (
+              <a key={n.label} href={n.to} data-label={n.label} class={"navbtn" + (active(n.to) ? " on" : "")} aria-current={active(n.to) ? "page" : undefined}>
+                <n.icon on={active(n.to)} />
+                <span class="lbl">{n.label}</span>
+              </a>
+            ))}
           </div>
+          <div class="navgroup later">
+            <span class="navhead">Coming soon</span>
+            {NAV.filter((n) => !n.live).map((n) => (
+              <button key={n.label} data-label={n.label} class="navbtn soon" title={`${n.label} is not built yet`} onClick={() => say(`${n.label} is not built yet`)}>
+                <n.icon on={active(n.to)} />
+                <span class="lbl">{n.label}</span>
+              </button>
+            ))}
+          </div>
+          <button class="navfoot" onClick={() => (passwordOpen.value = true)} title="Change password" aria-label="Admin account: change password">
+            <span class="avatar" aria-hidden="true">A</span>
+            <span class="who2"><b>Admin</b><small>Change password</small></span>
+            <span class="navkey" aria-hidden="true"><I.Key /></span>
+          </button>
         </nav>
         <main>{children}</main>
       </div>
+      <PasswordSheet />
       <div class={"toast" + (toast.value ? " show" : "")} role="status" aria-live="polite">{toast.value}</div>
     </div>
   );
@@ -123,11 +172,11 @@ function Shell({ children }: { children: preact.ComponentChildren }) {
 // ------------------------------------------------------------------ figures
 
 const FIG_ICON: Record<string, () => preact.JSX.Element> = {
-  "Accounts signed in": I.NavAccounts,
-  "Available margin": I.NavOverview,
-  "Used margin": I.NavRisk,
-  "Open positions": I.NavPositions,
-  "Open P&L": I.NavTrade,
+  "Accounts signed in": I.FigSignedIn,
+  "Available margin": I.FigAvailable,
+  "Used margin": I.FigUsed,
+  "Open positions": I.FigOpen,
+  "Open P&L": I.FigPnl,
 };
 
 function Figures({ items }: { items: { label: string; value: preact.ComponentChildren; sub?: string }[] }) {
@@ -158,70 +207,6 @@ function totals(accounts: AccountView[], positions: Position[]) {
     pnl: positions.reduce((t, p) => t + (p.pnl ?? 0), 0),
     open: positions.filter((p) => p.net_quantity !== 0).length,
   };
-}
-
-// --------------------------------------------------------- positions table
-
-function PositionsTable({ rows, showClient = true, empty }: { rows: Position[]; showClient?: boolean; empty: string }) {
-  const [q, setQ] = useState("");
-  const shown = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    return t ? rows.filter((p) => [p.trading_symbol, p.client_name, p.account_label, p.broker, p.product].some((x) => x.toLowerCase().includes(t))) : rows;
-  }, [rows, q]);
-  const pnl = shown.reduce((t, p) => t + (p.pnl ?? 0), 0);
-  return (
-    <div class="block">
-      <div class="strip">
-        <h2>Positions</h2>
-        <span class="count">{shown.length === rows.length ? `${rows.length}` : `${shown.length} of ${rows.length}`}</span>
-        <span class="grow" />
-        <label class="search">
-          <I.Search />
-          <input type="search" placeholder="Search positions" aria-label="Search positions" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
-        </label>
-      </div>
-      <div class="canvas">
-        {rows.length === 0 ? (
-          <p class="empty-line">{empty}</p>
-        ) : (
-          <table class="rtable">
-            <thead>
-              <tr>
-                {showClient && <th>Client</th>}
-                <th>Account</th>
-                <th>Contract</th>
-                <th>Product</th>
-                <th class="num">Quantity</th>
-                <th class="num">Average</th>
-                <th class="num">Last</th>
-                <th class="num">P&amp;L</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((p, i) => (
-                <tr class="rrow" key={`${p.account_id}-${p.trading_symbol}-${p.product}-${i}`} style={{ "--i": Math.min(i, 14) } as never}>
-                  {showClient && <td class="name"><a class="who" href={`#/clients/${p.client_id}`}><Avatar name={p.client_name} />{p.client_name}</a></td>}
-                  <td class="sub">{BROKERS[p.broker as BrokerId]?.name ?? p.broker} · {p.account_label.replace(/^\w+ /, "")}</td>
-                  <td class="name">{p.trading_symbol}</td>
-                  <td>{p.product}</td>
-                  <td class={"num qty " + (p.net_quantity < 0 ? "short" : "long")}>{qty(p.net_quantity)}</td>
-                  <td class="num"><Money n={p.average_price} /></td>
-                  <td class="num"><Money n={p.last_price} /></td>
-                  <td class="num"><Money n={p.pnl} plus tone /></td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colSpan={showClient ? 7 : 6} class="sub">Total P&amp;L{shown.length !== rows.length ? " of the positions shown" : ""}</td>
-                <td class="num"><Money n={pnl} plus tone /></td>
-              </tr>
-            </tfoot>
-          </table>
-        )}
-      </div>
-    </div>
-  );
 }
 
 // ----------------------------------------------------------------- overview
@@ -499,7 +484,7 @@ export function App() {
     };
   }, [signedIn.value]);
 
-  if (signedIn.value === null) return null;
+  if (signedIn.value === null) return <div class="splash" role="status" aria-label="Loading"><span class="mark"><I.Mark /></span></div>;
   if (!signedIn.value) return <Login />;
 
   const r = route.value.split("?")[0];
