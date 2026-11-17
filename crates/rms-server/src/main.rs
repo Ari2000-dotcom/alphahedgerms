@@ -1,13 +1,15 @@
 //! rms-server: `rms-server migrate` applies the schema; `rms-server` (or `serve`) runs the server.
 //!
-//! Phase 1 starts small: connect, migrate, and answer a health check that says
-//! which schema is in place. The collectors, reconciler, strategy engine and
-//! admin API are added step by step (see docs/DESIGN.md, section 12).
+//! Phase 1 starts small: open the database, migrate, and answer a health check
+//! that says which schema is in place and whether the stored history is intact.
+//! The collectors, reconciler, strategy engine and admin API are added step by
+//! step (see docs/DESIGN.md, section 12).
 
 use axum::{extract::State, routing::get, Json, Router};
+use rms_db::Db;
 use serde_json::{json, Value};
-use sqlx::PgPool;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
@@ -34,10 +36,23 @@ fn load_dotenv() {
     }
 }
 
-async fn health(State(pool): State<PgPool>) -> Json<Value> {
-    let migrations = rms_db::applied_migrations(&pool).await;
-    match migrations {
-        Ok(m) => Json(json!({"ok": true, "schema": m.last().map(|(v, d)| format!("{v} {d}"))})),
+async fn health(State(db): State<Db>) -> Json<Value> {
+    // The database is blocking code, so it runs off the async threads.
+    let out = tokio::task::spawn_blocking(move || -> rms_db::Result<Value> {
+        let schema = db.applied_migrations()?.last().map(|(v, n)| format!("{v} {n}"));
+        let orphans = db.orphans()?;
+        Ok(json!({
+            "ok": orphans.is_empty(),
+            "schema": schema,
+            "fills": db.fill_count()?,
+            "history_fingerprint": db.history_fingerprint()?,
+            "orphans": orphans,
+        }))
+    })
+    .await;
+    match out {
+        Ok(Ok(v)) => Json(v),
+        Ok(Err(e)) => Json(json!({"ok": false, "error": e.to_string()})),
         Err(e) => Json(json!({"ok": false, "error": e.to_string()})),
     }
 }
@@ -49,13 +64,15 @@ async fn main() {
         .init();
     load_dotenv();
 
-    let Some(url) = env("DATABASE_URL") else { die("DATABASE_URL is required (see .env.example)") };
-    let pool = rms_db::connect(&url).await.unwrap_or_else(|e| die(format!("cannot connect to the database: {e}")));
-    rms_db::migrate(&pool).await.unwrap_or_else(|e| die(format!("cannot apply the schema: {e}")));
+    // Everything lives in one folder: the DuckDB file, and the Parquet archive beside it.
+    let data_dir = PathBuf::from(env("RMS_DATA_DIR").unwrap_or_else(|| "data".into()));
+    let file = data_dir.join("rms.duckdb");
+    let db = Db::open(&file).unwrap_or_else(|e| die(format!("cannot open {}: {e}", file.display())));
+    db.migrate().unwrap_or_else(|e| die(format!("cannot apply the schema: {e}")));
 
     if std::env::args().nth(1).as_deref() == Some("migrate") {
-        let applied = rms_db::applied_migrations(&pool).await.unwrap_or_default();
-        println!("schema is up to date: {} migration(s) applied", applied.len());
+        let applied = db.applied_migrations().unwrap_or_default();
+        println!("schema is up to date: {} migration(s) applied, database at {}", applied.len(), file.display());
         return;
     }
 
@@ -63,9 +80,9 @@ async fn main() {
         .unwrap_or_else(|| "127.0.0.1:8090".into())
         .parse()
         .unwrap_or_else(|_| die("RMS_BIND is not a valid address like 127.0.0.1:8090"));
-    let app = Router::new().route("/health", get(health)).with_state(pool);
+    let app = Router::new().route("/health", get(health)).with_state(db);
     let listener = tokio::net::TcpListener::bind(bind).await.unwrap_or_else(|e| die(format!("cannot listen on {bind}: {e}")));
-    tracing::info!("listening on http://{bind}");
+    tracing::info!("listening on http://{bind}, data in {}", data_dir.display());
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

@@ -1,6 +1,6 @@
 /target
-/pgdata
-/pglog.txt
+/data
+
 .env
 *.log
 node_modules/
