@@ -93,6 +93,7 @@ CREATE SEQUENCE assignment_events_id_seq;
 CREATE SEQUENCE assignment_rules_id_seq;
 CREATE SEQUENCE lots_id_seq;
 CREATE SEQUENCE lot_closures_id_seq;
+CREATE SEQUENCE position_runs_id_seq;
 CREATE SEQUENCE position_snapshots_id_seq;
 CREATE SEQUENCE margin_snapshots_id_seq;
 CREATE SEQUENCE ledger_entries_id_seq;
@@ -294,8 +295,19 @@ CREATE INDEX lot_closures_lot ON lot_closures (lot_id);
 
 -- ------------------------------------------------------------- snapshots
 
+-- One row per time an account's positions were read, even when it had none, so
+-- "the latest read" is well defined and an empty book is not mistaken for an old one.
+CREATE TABLE position_runs (
+    id              BIGINT PRIMARY KEY DEFAULT nextval('position_runs_id_seq'),
+    account_id      UUID NOT NULL,
+    taken_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    row_count       INTEGER NOT NULL
+);
+CREATE INDEX position_runs_account ON position_runs (account_id, id);
+
 CREATE TABLE position_snapshots (
     id              BIGINT PRIMARY KEY DEFAULT nextval('position_snapshots_id_seq'),
+    run_id          BIGINT NOT NULL,
     account_id      UUID NOT NULL,
     taken_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     segment         VARCHAR,
@@ -308,7 +320,7 @@ CREATE TABLE position_snapshots (
     pnl             DECIMAL(18, 4),
     raw             VARCHAR
 );
-CREATE INDEX position_snapshots_account_time ON position_snapshots (account_id, taken_at);
+CREATE INDEX position_snapshots_run ON position_snapshots (run_id);
 
 CREATE TABLE margin_snapshots (
     id              BIGINT PRIMARY KEY DEFAULT nextval('margin_snapshots_id_seq'),

@@ -28,3 +28,8 @@ strip = true
 # Windows: a scanner watching target\ can race rustc ("OS error 32"); one codegen unit avoids it.
 [profile.dev.build-override]
 codegen-units = 1
+
+# DuckDB's C++ engine compiled without optimisation is about 50x slower, which
+# made a 3000-fill test take minutes. Optimise just that one dependency.
+[profile.dev.package.libduckdb-sys]
+opt-level = 2

@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 
 pub mod fills;
 pub mod model;
+pub mod people;
 
 /// Schema versions, applied in order, each once. Compiled into the program.
 const MIGRATIONS: &[(i32, &str, &str)] = &[(1, "init", include_str!("../sql/0001_init.sql"))];
@@ -27,6 +28,11 @@ pub enum Error {
     Db(#[from] duckdb::Error),
     #[error("{0}")]
     Other(String),
+    /// A unique value was already taken (a client code, an account).
+    #[error("{0}")]
+    Duplicate(String),
+    #[error("not found: {0}")]
+    NotFound(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

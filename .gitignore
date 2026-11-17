@@ -1,7 +1,6 @@
 /target
 /data
-
 .env
 *.log
-node_modules/
-dist/
+web/node_modules/
+web/dist/

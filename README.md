@@ -13,29 +13,37 @@ Read `docs/DESIGN.md` first. It is the plan; this file is the state.
 | Part | State |
 |---|---|
 | Design | written (docs/DESIGN.md), reviewed by an advisor |
-| Database schema | written (`crates/rms-db/migrations/0001_init.sql`) and compiles |
-| Database tests | written, **not yet run against a real Postgres** (they skip without one) |
-| Server | connects, migrates, answers `/health` |
-| Broker collectors, order sockets | not built |
-| Strategy engine, reconciler | not built |
-| Admin screen | not built |
+| Database | DuckDB + Parquet: schema, fills without duplicates, tamper fingerprint, Parquet export, clients, accounts, position and margin snapshots. 20 tests |
+| Server | admin login, clients, broker accounts (sealed), sign-in, positions and margin read for Zerodha, Angel One, Kotak (Kotak positions unverified) |
+| Admin screen | built: sign-in, overview, clients, client page with adding broker accounts and per-broker hints, positions |
+| Upstox and Nubra positions | not built |
+| Order sockets, trade capture, end-of-day sweep | not built (next) |
+| Strategies, tagging, reconciliation | not built |
+| Live prices from the MarketHub feed | not built (positions use the broker's own last price) |
+| Retention job (delete after expiry) | not built; the owner has not chosen the days |
 
 ## Layout
 
 ```
-crates/rms-db/      schema, migrations, row types, storing fills
-crates/rms-server/  the server process
-scripts/setup-db.ps1  creates the RMS's own Postgres cluster (port 5433)
+crates/rms-db/      DuckDB schema, queries, Parquet export
+crates/rms-server/  the server: API, brokers, admin login
+web/                the admin screen (Preact + Vite)
 docs/DESIGN.md      the design
 ```
 
 ## Run
 
 ```bash
-powershell -ExecutionPolicy Bypass -File scripts\setup-db.ps1   # once: own Postgres + .env
-cargo run -p rms-server -- migrate                               # apply the schema
-cargo run -p rms-server                                          # serve on RMS_BIND
-RMS_TEST_DATABASE_URL=postgres://... cargo test -p rms-db        # database tests
+cd web && npm install && npm run build      # once: build the admin screen
+cargo run -p rms-server                     # serves the screen and API on 127.0.0.1:8090
 ```
 
-`.env` holds the database password and is never committed.
+The first run creates `.env` with a random admin password and the key that seals broker
+passwords, and prints the password once. Keep `.env` private. Open
+http://127.0.0.1:8090 and sign in.
+
+Development: `cargo run -p rms-server` plus `cd web && npm run dev` (the page on :5290,
+its /api calls proxied to the server).
+
+The `target` folder is large (DuckDB's engine is compiled from source, about 8 GB per
+build profile). It can be deleted at any time.

@@ -6,7 +6,7 @@ orders and trades in one place. The system keeps its own permanent record of
 every order and trade, so a strategy grouped by the admin stays whole after the
 broker has forgotten the day.
 
-Status: design agreed in outline, schema written, nothing else built.
+Status: design agreed, storage moved from Postgres to DuckDB plus Parquet (2026-11-17), database layer and admin screen built, broker positions read for Zerodha, Angel One and Kotak.
 Advisor review: Opus 5.5, 2026-11-17. Its corrections are marked (advisor).
 
 ## 1. Goals and non-goals
@@ -45,14 +45,14 @@ security on `client_id` becomes a second safety net behind the API checks.
                      |   collectors (one per account)|
                      +--+-----------+-----------+----+
                         |           |           |
-              broker APIs   broker order    Postgres 17
-              (REST)        WebSockets      (own cluster, own port)
+              broker APIs   broker order    DuckDB file + Parquet archive
+              (REST)        WebSockets      (one folder, written only by the server)
                         |
               hosted market feed (MarketHub /ws, quote:SEG:token) for live prices
 ```
 
 Crates (a Cargo workspace):
-- `rms-db`: migrations, queries and the plain data types. No network code.
+- `rms-db`: DuckDB schema, queries, Parquet export and the plain data types. No network code.
 - `rms-brokers`: sign-in (reused from `kite-engine`), margin, positions,
   orders, trades, order streams. One module per broker behind one trait.
 - `rms-server`: the process: API, collectors, reconciler, strategy engine.
@@ -104,12 +104,28 @@ socket, so reconnect with a fresh sign-in.
 
 ## 5. The database
 
-Postgres 17, a separate cluster in this project's folder on its own port, so
-it never touches other projects' databases. Money is `NUMERIC`, never floating
-point. (advisor)
+DuckDB, with Parquet for finished history. No database server to install or run.
 
-Append-only (a trigger refuses UPDATE and DELETE): `fills`, `order_events`,
-`position_events`, `assignment_events`, `audit_log`.
+- One DuckDB file (`data/rms.duckdb`) holds everything that changes and everything
+  still active: clients, accounts, strategies, tags, live fills and orders.
+- Finished history is exported to ZSTD-compressed Parquet files
+  (`data/fills/date=YYYY-MM-DD/fills.parquet`). Files are written to a temporary
+  name and renamed, never edited, so they are a tamper-evident archive and back up
+  by copying. Measured: 3,000 synthetic fills became 28 KB (about 9.5 bytes each).
+- Only one process may write to the file: `rms-server`. The admin screen and the
+  later client portal talk to the server, never to the file. A client sees only
+  their own rows because every query goes through one function that filters by
+  `client_id`. (This replaces Postgres row-level security.)
+- DuckDB has no triggers and its foreign keys cannot update a referenced row, so:
+  the data layer offers only "insert" for the record tables; `history_fingerprint()`
+  hashes fills, order events and assignment events so a nightly check can prove
+  nothing changed behind its back; `orphans()` replaces foreign keys.
+- Money is `DECIMAL(18,4)`, never floating point. Values go in as text and are cast
+  in SQL, so nothing depends on how a driver maps decimals or times.
+- Retention: a setting, `heavy_data_days_after_expiry` (0 = keep). Raw broker replies
+  and snapshots are the heavy part. A short permanent summary per finished strategy
+  (`strategy_summaries`, about 1 KB) is what remains. The job itself is not built;
+  the owner has not yet chosen the number of days.
 
 Tables:
 - `admins`, `clients`, `broker_accounts` (credentials sealed with the vault).
@@ -201,7 +217,7 @@ master.
 
 ## 11. Operations
 
-Backups: `pg_dump` nightly plus the data folder; test a restore. Alerts for:
+Backups: copy the `data` folder (checkpoint first; the Parquet files never change, so copies are incremental); test a restore. Alerts for:
 sign-in failure, collector silent for more than a minute in market hours, a
 reconciliation flag, the sweep not finishing. The server must be on every market
 day, ideally on a small always-on machine.

@@ -1,15 +1,23 @@
-//! rms-server: `rms-server migrate` applies the schema; `rms-server` (or `serve`) runs the server.
+//! rms-server: `rms-server migrate` applies the schema; `rms-server` runs the server.
 //!
-//! Phase 1 starts small: open the database, migrate, and answer a health check
-//! that says which schema is in place and whether the stored history is intact.
-//! The collectors, reconciler, strategy engine and admin API are added step by
-//! step (see docs/DESIGN.md, section 12).
+//! One process serves the admin API (under /api) and the admin screen (the built files in
+//! `web/dist`). Phase 1 is read-only: it signs in to broker accounts and reads positions
+//! and margin; it never places an order.
+
+mod api;
+mod brokers;
+mod setup;
 
 use axum::{extract::State, routing::get, Json, Router};
+use kite_engine::crypto::Vault;
+use kite_engine::login::BrokerUrls;
 use rms_db::Db;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use tower_http::services::{ServeDir, ServeFile};
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
@@ -18,22 +26,6 @@ fn env(name: &str) -> Option<String> {
 fn die(msg: impl std::fmt::Display) -> ! {
     eprintln!("{msg}");
     std::process::exit(2)
-}
-
-/// Reads KEY=VALUE lines from `.env` in the current folder into the environment, without overriding real variables.
-fn load_dotenv() {
-    let Ok(text) = std::fs::read_to_string(".env") else { return };
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some((k, v)) = line.split_once('=') {
-            if std::env::var_os(k.trim()).is_none() {
-                std::env::set_var(k.trim(), v.trim());
-            }
-        }
-    }
 }
 
 async fn health(State(db): State<Db>) -> Json<Value> {
@@ -62,7 +54,11 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
-    load_dotenv();
+
+    let secrets = setup::ensure();
+    if let Some(p) = &secrets.new_password {
+        println!("\nFirst run: the admin password is\n\n    {p}\n\nIt is saved in .env (RMS_ADMIN_PASSWORD). Keep .env private: it also holds the key that seals broker passwords.\n");
+    }
 
     // Everything lives in one folder: the DuckDB file, and the Parquet archive beside it.
     let data_dir = PathBuf::from(env("RMS_DATA_DIR").unwrap_or_else(|| "data".into()));
@@ -80,9 +76,26 @@ async fn main() {
         .unwrap_or_else(|| "127.0.0.1:8090".into())
         .parse()
         .unwrap_or_else(|_| die("RMS_BIND is not a valid address like 127.0.0.1:8090"));
-    let app = Router::new().route("/health", get(health)).with_state(db);
+    let state = api::AppState {
+        db: db.clone(),
+        vault: Arc::new(Vault::new(&secrets.vault_key)),
+        admin_password: Arc::new(secrets.admin_password),
+        sessions: Arc::new(Mutex::new(HashMap::new())),
+        live: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        status: Arc::new(Mutex::new(HashMap::new())),
+        urls: Arc::new(BrokerUrls::default()),
+    };
+
+    // The admin screen: built files from web/dist, with index.html for any other path.
+    let dist = PathBuf::from(env("RMS_WEB_DIR").unwrap_or_else(|| "web/dist".into()));
+    let screen = ServeDir::new(&dist).fallback(ServeFile::new(dist.join("index.html")));
+
+    let app = Router::new()
+        .route("/health", get(health).with_state(db))
+        .nest("/api", api::router(state))
+        .fallback_service(screen);
     let listener = tokio::net::TcpListener::bind(bind).await.unwrap_or_else(|e| die(format!("cannot listen on {bind}: {e}")));
-    tracing::info!("listening on http://{bind}, data in {}", data_dir.display());
+    tracing::info!("admin screen and API on http://{bind}, data in {}", data_dir.display());
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

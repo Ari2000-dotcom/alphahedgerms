@@ -1,0 +1,628 @@
+import { useEffect, useMemo, useState } from "preact/hooks";
+import { signal } from "@preact/signals";
+import { api, ApiError, overview, signedIn, type AccountView, type Client, type Position } from "./api";
+import { BROKER_ORDER, BROKERS, type BrokerId } from "./brokers";
+import { moneyParts } from "./format";
+import * as I from "./icons";
+
+// -------------------------------------------------------------------- state
+
+const toast = signal("");
+let toastTimer: number | undefined;
+function say(msg: string) {
+  toast.value = msg;
+  clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => (toast.value = ""), 3200);
+}
+const fail = (e: unknown) => say(e instanceof Error ? e.message : String(e));
+
+const route = signal(location.hash || "#/");
+window.addEventListener("hashchange", () => (route.value = location.hash || "#/"));
+const go = (to: string) => (location.hash = to);
+
+const busy = signal(false);
+
+async function readBrokers() {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    await api.refreshAll();
+  } catch (e) {
+    fail(e);
+  } finally {
+    busy.value = false;
+  }
+}
+
+// ------------------------------------------------------------------ numbers
+
+function Money({ n, plus = false, tone = false }: { n: number | null | undefined; plus?: boolean; tone?: boolean }) {
+  if (n === null || n === undefined) return <span class="money zero">–</span>;
+  const p = moneyParts(n, plus);
+  if (!p) return <span class="money zero">–</span>;
+  return (
+    <span class={"money" + (tone ? ` pnl ${p.tone}` : "")}>
+      {p.sign}{p.int}<span class="frac">{p.frac}</span>
+    </span>
+  );
+}
+
+const qty = (n: number) => (n === 0 ? "0" : n.toLocaleString("en-IN"));
+
+// ------------------------------------------------------------------ sign in
+
+function Login() {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const [wait, setWait] = useState(false);
+  async function submit(e: Event) {
+    e.preventDefault();
+    if (!pw || wait) return;
+    setWait(true);
+    setErr("");
+    try {
+      await api.login(pw);
+      await api.loadOverview();
+    } catch (x) {
+      setErr(x instanceof ApiError ? x.message : String(x));
+    } finally {
+      setWait(false);
+    }
+  }
+  return (
+    <div class="login">
+      <form class="logincard" onSubmit={submit}>
+        <span class="mark big"><I.Mark /></span>
+        <h1>Alphahedge RMS</h1>
+        <p class="sub">Admin sign-in</p>
+        <label class="fld">
+          <span class="lab">Password</span>
+          <input type="password" autocomplete="current-password" value={pw} autofocus onInput={(e) => setPw(e.currentTarget.value)} aria-invalid={err ? "true" : undefined} />
+        </label>
+        {err && <p class="banner" role="alert">{err}</p>}
+        <button class="btn primary" type="submit" disabled={wait || !pw}>{wait ? "Checking…" : "Sign in"}</button>
+      </form>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------- shell
+
+const NAV: { label: string; to: string; icon: () => preact.JSX.Element; live: boolean }[] = [
+  { label: "Overview", to: "#/", icon: I.NavOverview, live: true },
+  { label: "Clients", to: "#/clients", icon: I.NavAccounts, live: true },
+  { label: "Positions", to: "#/positions", icon: I.NavPositions, live: true },
+  { label: "Orders and trades", to: "", icon: I.NavOrders, live: false },
+  { label: "Strategies", to: "", icon: I.NavTrade, live: false },
+  { label: "Risk limits", to: "", icon: I.NavRisk, live: false },
+];
+
+function Shell({ children }: { children: preact.ComponentChildren }) {
+  const r = route.value;
+  const active = (to: string) => (to === "#/" ? r === "#/" || r === "" : r.startsWith(to));
+  const last = overview.value?.accounts.map((a) => a.status?.at).filter(Boolean).sort().pop();
+  return (
+    <div class="shell">
+      <header class="top">
+        <div class="brand">
+          <span class="mark"><I.Mark /></span>
+          <b>Alphahedge RMS</b>
+        </div>
+        <span class="badge paper">Admin</span>
+        <span class="grow" />
+        <span class="status">{last ? `Last read from brokers ${new Date(last).toLocaleTimeString("en-IN")}` : "Not read from brokers yet"}</span>
+        <button class="btn" disabled={busy.value} onClick={readBrokers} title="Sign in where needed and read every account's positions and margin now">
+          <span class={busy.value ? "spin" : ""}><I.Refresh /></span>
+          {busy.value ? "Reading…" : "Read brokers"}
+        </button>
+        <button class="btn quiet" onClick={() => api.logout().catch(fail)}>Sign out</button>
+      </header>
+      <div class="body">
+        <nav class="nav" aria-label="Sections">
+          <div class="navgroup">
+            {NAV.map((n) =>
+              n.live ? (
+                <a key={n.label} href={n.to} class={"navbtn" + (active(n.to) ? " on" : "")} aria-label={n.label} aria-current={active(n.to) ? "page" : undefined}>
+                  <n.icon />
+                  <span class="tip" role="tooltip">{n.label}</span>
+                </a>
+              ) : (
+                <button key={n.label} class="navbtn soon" aria-label={`${n.label}, not built yet`} onClick={() => say(`${n.label} is not built yet`)}>
+                  <n.icon />
+                  <span class="tip" role="tooltip">{n.label}<em>Soon</em></span>
+                </button>
+              ),
+            )}
+          </div>
+        </nav>
+        <main>{children}</main>
+      </div>
+      <div class={"toast" + (toast.value ? " show" : "")} role="status" aria-live="polite">{toast.value}</div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ figures
+
+function Figures({ items }: { items: { label: string; value: preact.ComponentChildren; sub?: string }[] }) {
+  return (
+    <div class="figures">
+      {items.map((f) => (
+        <div class="fig" key={f.label}>
+          <span class="lab">{f.label}</span>
+          <b class="val">{f.value}</b>
+          {f.sub && <small class="figsub">{f.sub}</small>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function totals(accounts: AccountView[], positions: Position[]) {
+  const live = accounts.filter((a) => a.account.enabled);
+  const sum = (pick: (m: NonNullable<AccountView["margin"]>) => number | null) => live.reduce((t, a) => t + (a.margin ? pick(a.margin) ?? 0 : 0), 0);
+  return {
+    accounts: live.length,
+    signedIn: live.filter((a) => a.status?.signed_in).length,
+    available: sum((m) => m.available),
+    used: sum((m) => m.used),
+    pnl: positions.reduce((t, p) => t + (p.pnl ?? 0), 0),
+    open: positions.filter((p) => p.net_quantity !== 0).length,
+  };
+}
+
+// --------------------------------------------------------- positions table
+
+function PositionsTable({ rows, showClient = true, empty }: { rows: Position[]; showClient?: boolean; empty: string }) {
+  const [q, setQ] = useState("");
+  const shown = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    return t ? rows.filter((p) => [p.trading_symbol, p.client_name, p.account_label, p.broker, p.product].some((x) => x.toLowerCase().includes(t))) : rows;
+  }, [rows, q]);
+  const pnl = shown.reduce((t, p) => t + (p.pnl ?? 0), 0);
+  return (
+    <div class="block">
+      <div class="strip">
+        <h2>Positions</h2>
+        <span class="count">{shown.length === rows.length ? `${rows.length}` : `${shown.length} of ${rows.length}`}</span>
+        <span class="grow" />
+        <label class="search">
+          <I.Search />
+          <input type="search" placeholder="Search positions" aria-label="Search positions" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
+        </label>
+      </div>
+      <div class="canvas">
+        {rows.length === 0 ? (
+          <p class="empty-line">{empty}</p>
+        ) : (
+          <table class="rtable">
+            <thead>
+              <tr>
+                {showClient && <th>Client</th>}
+                <th>Account</th>
+                <th>Contract</th>
+                <th>Product</th>
+                <th class="num">Quantity</th>
+                <th class="num">Average</th>
+                <th class="num">Last</th>
+                <th class="num">P&amp;L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((p, i) => (
+                <tr class="rrow" key={`${p.account_id}-${p.trading_symbol}-${p.product}-${i}`} style={{ "--i": Math.min(i, 14) } as never}>
+                  {showClient && <td class="name"><a href={`#/clients/${p.client_id}`}>{p.client_name}</a></td>}
+                  <td class="sub">{BROKERS[p.broker as BrokerId]?.name ?? p.broker} · {p.account_label.replace(/^\w+ /, "")}</td>
+                  <td class="name">{p.trading_symbol}</td>
+                  <td>{p.product}</td>
+                  <td class={"num qty " + (p.net_quantity < 0 ? "short" : "long")}>{qty(p.net_quantity)}</td>
+                  <td class="num"><Money n={p.average_price} /></td>
+                  <td class="num"><Money n={p.last_price} /></td>
+                  <td class="num"><Money n={p.pnl} plus tone /></td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={showClient ? 7 : 6} class="sub">Total P&amp;L{shown.length !== rows.length ? " of the positions shown" : ""}</td>
+                <td class="num"><Money n={pnl} plus tone /></td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------- overview
+
+function Overview() {
+  const o = overview.value;
+  if (!o) return <Loading />;
+  const t = totals(o.accounts, o.positions);
+  const trouble = o.accounts.filter((a) => a.account.enabled && a.status && (a.status.error || a.status.margin_error));
+  if (o.clients.length === 0) {
+    return (
+      <section class="screen">
+        <div class="canvas"><div class="empty">
+          <span class="glyph"><I.NavAccounts /></span>
+          <h2>Add your first client</h2>
+          <p>A client owns broker accounts. Add the client, then add their Zerodha, Kotak or Angel One account and their positions and margin appear here.</p>
+          <button class="btn primary" onClick={() => go("#/clients?add=1")}><I.Plus /> Add a client</button>
+        </div></div>
+      </section>
+    );
+  }
+  return (
+    <section class="screen">
+      <div class="strip"><h1>Overview</h1><span class="count">{o.clients.length} client{o.clients.length === 1 ? "" : "s"}</span></div>
+      <Figures
+        items={[
+          { label: "Accounts signed in", value: <>{t.signedIn}<span class="of"> of {t.accounts}</span></> },
+          { label: "Available margin", value: <Money n={t.available} /> },
+          { label: "Used margin", value: <Money n={t.used} /> },
+          { label: "Open positions", value: t.open },
+          { label: "P&L on open positions", value: <Money n={t.pnl} plus tone /> },
+        ]}
+      />
+      {trouble.length > 0 && (
+        <div class="block">
+          <div class="strip"><h2>Needs attention</h2><span class="count">{trouble.length}</span></div>
+          <div class="canvas attention">
+            {trouble.map((a) => (
+              <div class="issue" key={a.account.id}>
+                <span class="state"><i class="dot bad" /><a href={`#/clients/${a.account.client_id}`}>{a.account.client_name}</a> · {BROKERS[a.account.broker as BrokerId]?.name ?? a.account.broker} {a.account.broker_user_id}</span>
+                <span class="why">{a.status?.error ?? a.status?.margin_error}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <PositionsTable rows={o.positions} empty="No open positions yet. Press Read brokers to fetch them." />
+    </section>
+  );
+}
+
+function Loading() {
+  return <section class="screen"><div class="canvas"><div class="skel" aria-hidden="true">{[0, 1, 2].map((i) => <div key={i} />)}</div></div></section>;
+}
+
+// ------------------------------------------------------------------ clients
+
+function ClientsPage() {
+  const o = overview.value;
+  const [adding, setAdding] = useState(location.hash.includes("add=1"));
+  const [q, setQ] = useState("");
+  const [f, setF] = useState({ client_code: "", name: "", phone: "", email: "" });
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  if (!o) return <Loading />;
+  const t = q.trim().toLowerCase();
+  const rows = t ? o.clients.filter((c) => [c.client_code, c.name, c.phone ?? "", c.email ?? ""].some((x) => x.toLowerCase().includes(t))) : o.clients;
+
+  async function save() {
+    if (saving) return;
+    if (!f.client_code.trim() || !f.name.trim()) return setErr("A client needs a code and a name.");
+    setSaving(true);
+    setErr("");
+    try {
+      const id = await api.addClient(f);
+      say(`${f.name} added. Now add their broker account.`);
+      setAdding(false);
+      setF({ client_code: "", name: "", phone: "", email: "" });
+      go(`#/clients/${id}`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+  const keys = (e: KeyboardEvent) => {
+    if (e.key === "Enter") { e.preventDefault(); void save(); }
+    if (e.key === "Escape") { setAdding(false); setErr(""); }
+  };
+  const input = (k: keyof typeof f, label: string, placeholder: string, bad = false) => (
+    <label class="fld">
+      <span class="lab">{label}</span>
+      <input value={f[k]} placeholder={placeholder} autocomplete="off" aria-invalid={bad ? "true" : undefined} autofocus={k === "client_code"} onInput={(e) => { const v = e.currentTarget.value; setF((p) => ({ ...p, [k]: v })); }} onKeyDown={keys} />
+    </label>
+  );
+
+  return (
+    <section class="screen">
+      <div class="strip">
+        <h1>Clients</h1>
+        <span class="count">{rows.length === o.clients.length ? o.clients.length : `${rows.length} of ${o.clients.length}`}</span>
+        <span class="rule" />
+        <label class="search">
+          <I.Search />
+          <input type="search" placeholder="Search clients" aria-label="Search clients" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
+        </label>
+        <span class="grow" />
+        <button class="btn primary" disabled={adding} onClick={() => setAdding(true)}><I.Plus /> Add client</button>
+      </div>
+
+      {adding && (
+        <div class="addpanel">
+          <h2>New client</h2>
+          <div class="addgrid">
+            {input("client_code", "Client code", "C001, or the code you use", err.includes("code"))}
+            {input("name", "Name", "Full name", err.includes("name"))}
+            {input("phone", "Phone", "Optional")}
+            {input("email", "Email", "Optional")}
+          </div>
+          {err && <p class="banner" role="alert">{err}</p>}
+          <div class="addfoot">
+            <button class="btn primary" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save client"}</button>
+            <button class="btn quiet" onClick={() => { setAdding(false); setErr(""); }}>Cancel</button>
+            <span class="sub">After saving, you add the client's broker accounts.</span>
+          </div>
+        </div>
+      )}
+
+      <div class="canvas">
+        {rows.length === 0 ? (
+          <p class="empty-line">{o.clients.length === 0 ? "No clients yet." : "No client matches."}</p>
+        ) : (
+          <table class="rtable">
+            <thead>
+              <tr>
+                <th>Code</th><th>Name</th><th>Phone</th><th>Email</th><th class="num">Accounts</th><th class="num">Open positions</th><th class="num">P&amp;L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((c, i) => {
+                const ps = o.positions.filter((p) => p.client_id === c.id);
+                return (
+                  <tr class="rrow link" key={c.id} style={{ "--i": Math.min(i, 14) } as never} onClick={() => go(`#/clients/${c.id}`)}>
+                    <td class="sub">{c.client_code}</td>
+                    <td class="name"><a href={`#/clients/${c.id}`}>{c.name}</a></td>
+                    <td class="sub">{c.phone ?? "–"}</td>
+                    <td class="sub">{c.email ?? "–"}</td>
+                    <td class="num">{c.accounts}</td>
+                    <td class="num">{ps.filter((p) => p.net_quantity !== 0).length}</td>
+                    <td class="num"><Money n={ps.length ? ps.reduce((s, p) => s + (p.pnl ?? 0), 0) : null} plus tone /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ------------------------------------------------------------ client detail
+
+function AddAccount({ client, onDone }: { client: Client; onDone: () => void }) {
+  const [broker, setBroker] = useState<BrokerId>("zerodha");
+  const [vals, setVals] = useState<Record<string, string>>({});
+  const [focus, setFocus] = useState("");
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  const def = BROKERS[broker];
+  const filled = (k: string) => !!(vals[k] ?? "").trim();
+  const next = def.fields.find((f) => !filled(f.key));
+  const hint = def.fields.find((f) => f.key === focus) ?? next;
+
+  async function save() {
+    if (saving) return;
+    const missing = def.fields.filter((f) => !filled(f.key));
+    if (missing.length) return setErr(`${def.name} needs: ${missing.map((f) => f.label).join(", ")}`);
+    setSaving(true);
+    setErr("");
+    try {
+      const secrets: Record<string, string> = {};
+      const fields: Record<string, string> = {};
+      let user_id = "";
+      for (const f of def.fields) {
+        const v = vals[f.key].trim();
+        if (f.key === "userId") user_id = v;
+        else if (f.secret) secrets[f.key] = v;
+        else fields[f.key] = v;
+      }
+      const r = await api.addAccount(client.id, { broker, user_id, secrets, fields });
+      say(r.status.signed_in ? `${def.name} account added and signed in` : `Account saved, but sign-in failed: ${r.status.error ?? "unknown error"}`);
+      onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+  const keys = (e: KeyboardEvent) => {
+    if (e.key === "Enter") { e.preventDefault(); void save(); }
+    if (e.key === "Escape") onDone();
+  };
+  const common = (f: (typeof def.fields)[number]) => ({
+    value: vals[f.key] ?? "",
+    autocomplete: "off",
+    spellcheck: false,
+    placeholder: f.label,
+    "aria-invalid": err && !filled(f.key) ? ("true" as const) : undefined,
+    autofocus: f === def.fields[0],
+    onInput: (e: { currentTarget: HTMLInputElement }) => { const v = e.currentTarget.value; setVals((p) => ({ ...p, [f.key]: v })); },
+    onFocus: () => setFocus(f.key),
+    onKeyDown: keys,
+  });
+
+  return (
+    <div class="addpanel">
+      <h2>Add a broker account for {client.name}</h2>
+      <fieldset class="brokers">
+        <legend>Broker</legend>
+        <div class="chips" role="radiogroup" aria-label="Broker">
+          {BROKER_ORDER.map((b) => (
+            <label key={b} class={"chip-opt" + (broker === b ? " on" : "")}>
+              <input type="radio" name="broker" value={b} checked={broker === b} onChange={() => { setBroker(b); setVals({}); setErr(""); }} />
+              {BROKERS[b].name}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <div class="addgrid">
+        {def.fields.map((f) => (
+          <label class="fld" key={broker + f.key}>
+            <span class="lab">{f.label}{filled(f.key) && <em class="saved"> · filled</em>}</span>
+            {f.secret ? <input type="password" {...common(f)} /> : <input type="text" {...common(f)} />}
+          </label>
+        ))}
+      </div>
+      <p class="hintline" role="status">
+        {hint ? <><strong>{hint.label}.</strong> {hint.where}</> : "All filled in. Press Enter to save and sign in."}
+        {def.note && <span class="note2"> {def.note}</span>}
+      </p>
+      {err && <p class="banner" role="alert">{err}</p>}
+      <div class="addfoot">
+        <button class="btn primary" disabled={saving} onClick={save}>{saving ? "Signing in…" : "Save and sign in"}</button>
+        <button class="btn quiet" onClick={onDone}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function AccountsTable({ accounts }: { accounts: AccountView[] }) {
+  const [one, setOne] = useState<string | null>(null);
+  async function refresh(id: string) {
+    setOne(id);
+    try { await api.refreshOne(id); } catch (e) { fail(e); } finally { setOne(null); }
+  }
+  async function remove(a: AccountView) {
+    if (!confirm(`Delete ${a.account.label}? Its saved sign-in details are removed. Positions and orders at the broker are not touched.`)) return;
+    try { await api.deleteAccount(a.account.id); say("Account deleted"); } catch (e) { fail(e); }
+  }
+  return (
+    <div class="canvas">
+      <table class="rtable">
+        <thead>
+          <tr>
+            <th>Broker</th><th>Account</th><th>Status</th><th class="num">Available</th><th class="num">Used</th><th class="num">Total</th><th class="num">Cash</th><th class="num">Collateral</th><th>Active</th><th><span class="vh">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {accounts.map((a, i) => {
+            const s = a.status;
+            const m = a.margin;
+            return (
+              <>
+                <tr class="rrow" key={a.account.id} style={{ "--i": Math.min(i, 14) } as never}>
+                  <td class="name">{BROKERS[a.account.broker as BrokerId]?.name ?? a.account.broker}</td>
+                  <td class="sub">{a.account.broker_user_id}</td>
+                  <td>
+                    {!s ? <span class="state"><i class="dot" />Not read yet</span> : s.signed_in ? <span class="state ok"><i class="dot ok" />Signed in</span> : <span class="state linklike"><i class="dot bad" />Sign-in failed</span>}
+                  </td>
+                  <td class="num"><Money n={m?.available} /></td>
+                  <td class="num"><Money n={m?.used} /></td>
+                  <td class="num"><Money n={m?.total} /></td>
+                  <td class="num">{m && m.cash === null ? <span class="money zero" title="This broker does not report cash on its own">–</span> : <Money n={m?.cash} />}</td>
+                  <td class="num"><Money n={m?.collateral} /></td>
+                  <td><input type="checkbox" checked={a.account.enabled} aria-label={`${a.account.label} active`} onChange={(e) => api.setEnabled(a.account.id, e.currentTarget.checked).catch(fail)} /></td>
+                  <td class="acts">
+                    <button class="ic" title="Read this account now" aria-label="Read this account now" disabled={one === a.account.id} onClick={() => refresh(a.account.id)}>
+                      <span class={one === a.account.id ? "spin" : ""}><I.Refresh /></span>
+                    </button>
+                    <button class="ic danger" title="Delete account" aria-label="Delete account" onClick={() => remove(a)}><I.Trash /></button>
+                  </td>
+                </tr>
+                {s?.error && <tr class="errrow"><td colSpan={10}>{s.error}</td></tr>}
+                {!s?.error && s?.margin_error && <tr class="errrow warnrow"><td colSpan={10}>Margin: {s.margin_error}</td></tr>}
+              </>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ClientPage({ id }: { id: string }) {
+  const o = overview.value;
+  const [adding, setAdding] = useState(false);
+  if (!o) return <Loading />;
+  const client = o.clients.find((c) => c.id === id);
+  if (!client) {
+    return (
+      <section class="screen">
+        <p class="empty-line">No such client. <a href="#/clients">Back to clients</a></p>
+      </section>
+    );
+  }
+  const accounts = o.accounts.filter((a) => a.account.client_id === id);
+  const positions = o.positions.filter((p) => p.client_id === id);
+  const t = totals(accounts, positions);
+  return (
+    <section class="screen">
+      <div class="strip">
+        <a class="back" href="#/clients" aria-label="Back to clients"><I.ChevUp /></a>
+        <h1>{client.name}</h1>
+        <span class="count">{client.client_code}{client.phone ? ` · ${client.phone}` : ""}{client.email ? ` · ${client.email}` : ""}</span>
+        <span class="grow" />
+        <button class="btn primary" disabled={adding} onClick={() => setAdding(true)}><I.Plus /> Add broker account</button>
+      </div>
+      <Figures
+        items={[
+          { label: "Accounts signed in", value: <>{t.signedIn}<span class="of"> of {t.accounts}</span></> },
+          { label: "Available margin", value: <Money n={t.available} /> },
+          { label: "Used margin", value: <Money n={t.used} /> },
+          { label: "Open positions", value: t.open },
+          { label: "P&L on open positions", value: <Money n={t.pnl} plus tone /> },
+        ]}
+      />
+      {adding && <AddAccount client={client} onDone={() => setAdding(false)} />}
+      <div class="block">
+        <div class="strip"><h2>Broker accounts</h2><span class="count">{accounts.length}</span></div>
+        {accounts.length === 0 ? (
+          <div class="canvas"><p class="empty-line">No broker account yet. Press Add broker account.</p></div>
+        ) : (
+          <AccountsTable accounts={accounts} />
+        )}
+      </div>
+      <PositionsTable rows={positions} showClient={false} empty="No open positions for this client." />
+    </section>
+  );
+}
+
+// ----------------------------------------------------------------- positions
+
+function PositionsPage() {
+  const o = overview.value;
+  if (!o) return <Loading />;
+  return (
+    <section class="screen">
+      <PositionsTable rows={o.positions} empty="No open positions yet. Press Read brokers to fetch them." />
+    </section>
+  );
+}
+
+// --------------------------------------------------------------------- app
+
+export function App() {
+  useEffect(() => {
+    void api.me().then(() => {
+      if (signedIn.value) api.loadOverview().catch(fail);
+    });
+  }, []);
+
+  // While signed in: show stored data every 15 s, and read the brokers every 30 s, only when the page is in front.
+  useEffect(() => {
+    if (!signedIn.value) return;
+    const show = window.setInterval(() => document.visibilityState === "visible" && api.loadOverview().catch(() => {}), 15000);
+    const read = window.setInterval(() => document.visibilityState === "visible" && void readBrokers(), 30000);
+    return () => {
+      clearInterval(show);
+      clearInterval(read);
+    };
+  }, [signedIn.value]);
+
+  if (signedIn.value === null) return null;
+  if (!signedIn.value) return <Login />;
+
+  const r = route.value.split("?")[0];
+  let page = <Overview />;
+  if (r === "#/clients") page = <ClientsPage />;
+  else if (r.startsWith("#/clients/")) page = <ClientPage id={r.slice("#/clients/".length)} key={r} />;
+  else if (r === "#/positions") page = <PositionsPage />;
+  return <Shell>{page}</Shell>;
+}

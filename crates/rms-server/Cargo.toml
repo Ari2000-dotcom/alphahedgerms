@@ -11,8 +11,17 @@ path = "src/main.rs"
 
 [dependencies]
 rms-db = { path = "../rms-db" }
+# Sign-in for the five brokers, the encrypted vault and margin reads: reused from the
+# copy-trading engine. A path dependency for now; vendor it when the two projects part.
+kite-engine = { path = "../../../Alphahedgecopytrading/kite-engine" }
 tokio.workspace = true
 axum.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tower-http = { version = "0.6", features = ["fs"] }
